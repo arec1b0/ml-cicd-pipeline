@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drift-monitor
+  namespace: monitoring
+  labels:
+    app: drift-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: drift-monitor
+  template:
+    metadata:
+      labels:
+        app: drift-monitor
+    spec:
+      containers:
+        - name: drift-monitor
+          image: ghcr.io/example/ml-cicd-pipeline-drift-monitor:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: drift-monitor-config
+          env:
+            - name: REFERENCE_DATASET_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: drift-monitor-config
+                  key: REFERENCE_DATASET_URI
+            - name: LOKI_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: drift-monitor-config
+                  key: LOKI_BASE_URL
+            - name: LOKI_QUERY
+              valueFrom:
+                configMapKeyRef:
+                  name: drift-monitor-config
+                  key: LOKI_QUERY
+            - name: DRIFT_EVALUATION_INTERVAL_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: drift-monitor-config
+                  key: DRIFT_EVALUATION_INTERVAL_SECONDS
+            - name: DRIFT_MIN_ROWS
+              valueFrom:
+                configMapKeyRef:
+                  name: drift-monitor-config
+                  key: DRIFT_MIN_ROWS
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

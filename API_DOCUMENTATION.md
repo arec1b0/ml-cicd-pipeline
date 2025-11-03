@@ -289,11 +289,13 @@ Trains a RandomForest classifier on the Iris dataset, logs it to MLflow, and opt
   - `model_uri` (str): Registered MLflow model URI (`models:/<name>/<version or stage>`)
   - `model_version` (str | None): Registered version when available
   - `model_path` (Path | None): Optional local path where the model was saved
+  - `reference_dataset_uri` (str | None): Storage URI for the persisted training split used as drift reference
 
 **Side Effects:**
 - Creates parent directories if they don't exist
 - Saves model as pickle file when `output_path` provided
 - Saves `metrics.json` next to `output_path` (or at `metrics_path`) with accuracy
+- Persists the reference dataset (features, targets, predictions) to `REFERENCE_DATASET_URI` when configured
 - Registers the model to MLflow using environment variables (`MLFLOW_TRACKING_URI`, etc.)
 
 **Usage:**
@@ -526,6 +528,7 @@ class TrainResult:
     model_uri: str
     model_version: str | None = None
     model_path: Path | None = None
+    reference_dataset_uri: str | None = None
 ```
 
 ---

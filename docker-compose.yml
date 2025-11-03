@@ -12,3 +12,19 @@ services:
     environment:
       - LOG_LEVEL=INFO
     restart: unless-stopped
+
+  drift-monitor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.drift-monitor
+    image: ml-cicd-pipeline-drift-monitor:local
+    ports:
+      - "9000:9000"
+    environment:
+      - REFERENCE_DATASET_URI=${REFERENCE_DATASET_URI:-/data/reference/train_reference.csv}
+      - CURRENT_DATASET_URI=${CURRENT_DATASET_URI:-/data/current/prediction_events.jsonl}
+      - DRIFT_EVALUATION_INTERVAL_SECONDS=${DRIFT_EVALUATION_INTERVAL_SECONDS:-300}
+      - DRIFT_MIN_ROWS=${DRIFT_MIN_ROWS:-50}
+    volumes:
+      - ./drift-data:/data
+    restart: unless-stopped

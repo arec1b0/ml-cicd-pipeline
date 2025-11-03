@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: drift-monitor-config
+  namespace: monitoring
+data:
+  REFERENCE_DATASET_URI: "s3://ml-artifacts/reference/train_reference.csv"
+  LOKI_BASE_URL: "http://loki.monitoring:3100"
+  LOKI_QUERY: '{app="ml-inference"} |= "prediction"'
+  DRIFT_EVALUATION_INTERVAL_SECONDS: "300"
+  DRIFT_MIN_ROWS: "50"

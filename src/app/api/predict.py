@@ -7,8 +7,10 @@ Comments and docstrings are written in English per repo standard.
 
 from __future__ import annotations
 from typing import List
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
+
+from src.utils.drift import emit_prediction_log
 
 router = APIRouter(prefix="/predict", tags=["predict"])
 
@@ -20,7 +22,7 @@ class PredictResponse(BaseModel):
     predictions: List[int]
 
 @router.post("/", response_model=PredictResponse)
-async def predict(request: Request, payload: PredictRequest) -> PredictResponse:
+async def predict(request: Request, payload: PredictRequest, background_tasks: BackgroundTasks) -> PredictResponse:
     """
     Predict endpoint expects JSON body: {"features": [[...], [...]]}.
     The model instance is attached to app.state.ml_wrapper during startup.
@@ -53,4 +55,20 @@ async def predict(request: Request, payload: PredictRequest) -> PredictResponse:
             normalized.append(int(p))
         else:
             normalized.append(p)
+
+    metadata = {
+        "path": str(request.url.path),
+        "client_host": getattr(request.client, "host", None),
+        "model": getattr(app.state, "model_metadata", None),
+        "headers": {
+            "user_agent": request.headers.get("user-agent"),
+            "x_request_id": request.headers.get("x-request-id"),
+        },
+    }
+    background_tasks.add_task(
+        emit_prediction_log,
+        features=payload.features,
+        predictions=normalized,
+        metadata=metadata,
+    )
     return PredictResponse(predictions=normalized)

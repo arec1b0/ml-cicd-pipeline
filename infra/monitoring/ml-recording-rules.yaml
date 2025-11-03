@@ -19,3 +19,23 @@ spec:
               0.95,
               sum(rate(ml_request_latency_seconds_bucket[5m])) by (le)
             )
+        - alert: DataDriftDetected
+          expr: evidently_data_drift_status == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Evidently reports dataset drift for the production model"
+            description: |
+              The drift monitoring service detected feature drift in the last comparison window.
+              Inspect Grafana dashboard and recent data ingest for anomalies.
+        - alert: HighPredictionPSI
+          expr: evidently_prediction_psi_score > 0.2
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Prediction distribution PSI above 0.2"
+            description: |
+              Prediction PSI exceeded 0.2, suggesting the model output distribution drifted significantly.
+              Investigate input data skew and consider retraining the model.

@@ -4,11 +4,13 @@ Contains a minimal, testable training function that follows SRP and is dependenc
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
 import json
+import logging
+import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
-import os
+
 import joblib
 import mlflow
 from mlflow.models.signature import infer_signature
@@ -17,6 +19,10 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
+from src.utils.drift import persist_reference_dataset
+
+logger = logging.getLogger(__name__)
+
 @dataclass
 class TrainResult:
     accuracy: float
@@ -24,6 +30,7 @@ class TrainResult:
     model_uri: str
     model_version: Optional[str] = None
     model_path: Optional[Path] = None
+    reference_dataset_uri: Optional[str] = None
 
 
 def _configure_mlflow() -> Tuple[str, str]:
@@ -59,11 +66,24 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
     _, registered_model_name = _configure_mlflow()
 
     data = load_iris()
-    X_train, X_val, y_train, y_val = train_test_split(data.data, data.target, test_size=0.2, random_state=42)
+    X_train, X_val, y_train, y_val = train_test_split(
+        data.data, data.target, test_size=0.2, random_state=42
+    )
     model = RandomForestClassifier(n_estimators=10, random_state=42)
     model.fit(X_train, y_train)
+    train_preds = model.predict(X_train)
     preds = model.predict(X_val)
     acc = float(accuracy_score(y_val, preds))
+
+    reference_dataset_uri = None
+    try:
+        reference_dataset_uri = persist_reference_dataset(
+            X_train, y_train, predictions=train_preds
+        )
+        if reference_dataset_uri:
+            logger.info("Persisted training split to %s for drift monitoring.", reference_dataset_uri)
+    except Exception as exc:
+        logger.warning("Failed to persist reference dataset: %s", exc, exc_info=True)
 
     # Log to MLflow
     with mlflow.start_run() as run:
@@ -106,6 +126,7 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
         model_uri=model_info.model_uri,
         model_version=getattr(model_info, "version", None),
         model_path=saved_model_path,
+        reference_dataset_uri=reference_dataset_uri,
     )
 
 if __name__ == "__main__":
@@ -123,5 +144,7 @@ if __name__ == "__main__":
     output_msg += ")"
     if result.model_path:
         output_msg += f"; local copy saved to: {result.model_path}"
+    if result.reference_dataset_uri:
+        output_msg += f"; reference dataset persisted to: {result.reference_dataset_uri}"
     print(output_msg)
     print(f"MODEL_URI={result.model_uri}")

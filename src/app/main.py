@@ -8,7 +8,6 @@ from __future__ import annotations
 from fastapi import FastAPI
 import logging
 from pathlib import Path
-from typing import Optional
 import json
 
 from src.app.config import MODEL_PATH, LOG_LEVEL
@@ -39,6 +38,7 @@ def create_app() -> FastAPI:
         # initialize state with names that avoid "model_" protected namespace
         app.state.ml_wrapper = None
         app.state.ml_metrics = None
+        app.state.model_metadata = None
         app.state.is_ready = False
 
         model_path = Path(MODEL_PATH)
@@ -63,10 +63,15 @@ def create_app() -> FastAPI:
                     except Exception:
                         pass
                 app.state.is_ready = True
+                app.state.model_metadata = {
+                    "model_path": str(model_path),
+                    "metrics": app.state.ml_metrics,
+                }
                 logging.getLogger().info(f"Loaded model from {model_path}, accuracy={acc}")
             except Exception as exc:
                 app.state.ml_wrapper = None
                 app.state.ml_metrics = None
+                app.state.model_metadata = None
                 app.state.is_ready = False
                 logging.getLogger().exception(f"Failed to load model: {exc}")
         else:
@@ -76,6 +81,7 @@ def create_app() -> FastAPI:
     async def _shutdown():
         app.state.ml_wrapper = None
         app.state.ml_metrics = None
+        app.state.model_metadata = None
         app.state.is_ready = False
         MODEL_ACCURACY.set(0)
 

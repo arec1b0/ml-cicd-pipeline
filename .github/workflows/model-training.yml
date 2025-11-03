@@ -36,6 +36,7 @@ jobs:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
           MLFLOW_EXPERIMENT_NAME: ${{ secrets.MLFLOW_EXPERIMENT_NAME }}
           MLFLOW_MODEL_NAME: ${{ secrets.MLFLOW_MODEL_NAME }}
+          REFERENCE_DATASET_URI: reference-data/train_reference.csv
         run: |
           set -eo pipefail
           OUTPUT=$(poetry run python -m src.models.trainer | tee /tmp/train.log)
@@ -50,3 +51,11 @@ jobs:
           if [ -n "$RUN_ID" ]; then
             echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Publish reference dataset artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-dataset
+          path: reference-data
+          if-no-files-found: warn

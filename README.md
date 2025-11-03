@@ -69,6 +69,16 @@ These workflows assume registry credentials and kubeconfig secrets are configure
 
 > Tests and workflows expect a `src/data/validators` module implementing the CLI invoked during data validation. Add or adjust validators to align with your data sources.
 
+## Drift Monitoring & Feedback Loop
+
+- **Reference snapshot** — `src/models/trainer.py` now persists the training split (features, labels, predictions) when `REFERENCE_DATASET_URI` is set. The GitHub Actions workflow publishes the CSV as an artefact; override the env var to stream the snapshot to S3, GCS, etc. Optional caps are exposed via `REFERENCE_DATASET_MAX_ROWS`.
+- **Production telemetry** — `/predict` emits JSON logs asynchronously (FastAPI `BackgroundTasks`) capturing feature batches, predictions, request metadata, and model info. Ship the container stdout to Loki/Promtail or another log sink to build the “current” dataset window for drift analysis.
+- **Evidently service** — `src/drift_monitoring/` provides a FastAPI service that periodically compares the reference and production windows using Evidently’s data and target drift presets and exports Prometheus gauges (`evidently_data_drift_status`, per-feature drift flags, prediction PSI, etc.).
+  - Run locally via `docker compose up drift-monitor` and mount reference/current datasets into `./drift-data/` (see `docker-compose.yml`).
+  - Kubernetes manifests under `infra/monitoring/` (`drift-monitor-*.yaml`) deploy the service, Service, ServiceMonitor, and a ConfigMap wiring Loki queries / reference URIs. Update image tags and ConfigMap values for your environment before applying.
+- **Alerting** — `infra/monitoring/ml-recording-rules.yaml` now raises `DataDriftDetected` and `HighPredictionPSI` alerts when Evidently surfaces sustained drift or high PSI scores. Point Alertmanager at your preferred notification channel.
+- **Ground-truth hook** — Prediction logs include request identifiers so downstream jobs can join delayed ground-truth labels and backfill accuracy metrics, enabling performance degradation tracking in the same Prometheus namespace.
+
 ## Documentation & Further Reading
 
 - `docs/ARCHITECTURE.md` — Detailed architecture, component responsibilities, and operational context.

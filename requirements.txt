@@ -6,3 +6,7 @@ pandas==2.0.3
 mlflow==2.7.0
 prometheus-client==0.17.0
 joblib==1.5.2
+evidently==0.7.15
+fsspec==2024.6.1
+s3fs==2024.6.1
+requests==2.32.3

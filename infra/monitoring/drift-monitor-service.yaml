@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: drift-monitor-svc
+  namespace: monitoring
+  labels:
+    app: drift-monitor
+spec:
+  ports:
+    - name: http
+      port: 9000
+      targetPort: http
+  selector:
+    app: drift-monitor
