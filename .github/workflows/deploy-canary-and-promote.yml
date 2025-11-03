@@ -75,12 +75,12 @@ jobs:
       - name: Ensure stable exists (install/update)
         run: |
           export KUBECONFIG=$(pwd)/kubeconfig
-          helm upgrade --install $RELEASE_NAME $CHART_PATH --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }}
+          helm upgrade --install $RELEASE_NAME $CHART_PATH --set nameOverride=$RELEASE_NAME --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }}
 
       - name: Deploy canary release (low weight)
         run: |
           export KUBECONFIG=$(pwd)/kubeconfig
-          helm upgrade --install $RELEASE_NAME-canary $CHART_PATH --set canary.enabled=true --set canary.image.tag=${{ github.sha }} --set canary.weight=10
+          helm upgrade --install $RELEASE_NAME-canary $CHART_PATH --set nameOverride=$RELEASE_NAME --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},canary.enabled=true --set canary.image.tag=${{ github.sha }} --set canary.weight=10
 
       - name: Wait for canary pods ready
         run: |
@@ -89,21 +89,20 @@ jobs:
           kubectl wait --for=condition=available --timeout=120s deploy/$RELEASE_NAME-canary || true
           sleep 10
 
-      - name: Port-forward and run smoke tests
-        run: |
-          export KUBECONFIG=$(pwd)/kubeconfig
-          kubectl port-forward svc/${{ env.RELEASE_NAME }}-svc ${{ env.OBSERVATION_PORT }}:8000 --kubeconfig kubeconfig >/tmp/portfw.log 2>&1 &
-          sleep 4
-          set -e
-          curl -sS --fail http://127.0.0.1:${{ env.OBSERVATION_PORT }}/health/ || { echo "health failed"; exit 1; }
-          curl -sS --fail -X POST http://127.0.0.1:${{ env.OBSERVATION_PORT }}/predict/ -H "Content-Type: application/json" -d '{"features":[[5.1,3.5,1.4,0.2]]}' || { echo "predict failed"; exit 1; }
-          echo "smoke tests ok"
-
-      - name: Evaluate model accuracy metric and decide
+      - name: Port-forward, run smoke tests, and evaluate metrics
         env:
           OBSERVATION_PORT: ${{ env.OBSERVATION_PORT }}
         run: |
-          # fetch metrics text and parse ml_model_accuracy
+          export KUBECONFIG=$(pwd)/kubeconfig
+          # start port-forward in background
+          kubectl port-forward svc/${{ env.RELEASE_NAME }}-canary-svc ${{ env.OBSERVATION_PORT }}:8000 --kubeconfig kubeconfig >/tmp/portfw.log 2>&1 &
+          sleep 4
+          set -e
+          # smoke tests
+          curl -sS --fail http://127.0.0.1:${OBSERVATION_PORT}/health/ || { echo "health failed"; exit 1; }
+          curl -sS --fail -X POST http://127.0.0.1:${OBSERVATION_PORT}/predict/ -H "Content-Type: application/json" -d '{"features":[[5.1,3.5,1.4,0.2]]}' || { echo "predict failed"; exit 1; }
+          echo "smoke tests ok"
+          # evaluate metrics
           METRIC=$(curl -sS http://127.0.0.1:${OBSERVATION_PORT}/metrics | awk '/^ml_model_accuracy /{print $2; exit}')
           echo "raw ml_model_accuracy=$METRIC"
           if [ -z "$METRIC" ]; then
@@ -132,11 +131,19 @@ else:
     print("Metric below threshold -> ROLLBACK")
     sys.exit(3)
 PY
-        shell: bash
+          EVAL_EXIT_CODE=$?
+          if [ $EVAL_EXIT_CODE -eq 3 ]; then
+            echo "Metric threshold not met. Uninstalling canary and failing gate."
+            export KUBECONFIG=$(pwd)/kubeconfig
+            helm uninstall $RELEASE_NAME-canary || true
+            exit 1
+          elif [ $EVAL_EXIT_CODE -ne 0 ]; then
+            exit $EVAL_EXIT_CODE
+          fi
 
       - name: Promote canary to stable
         if: ${{ success() }}
         run: |
           export KUBECONFIG=$(pwd)/kubeconfig
-          helm upgrade --install $RELEASE_NAME $CHART_PATH --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }}
+          helm upgrade --install $RELEASE_NAME $CHART_PATH --set nameOverride=$RELEASE_NAME --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }}
           helm uninstall $RELEASE_NAME-canary || true

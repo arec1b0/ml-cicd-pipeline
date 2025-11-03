@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ml-recording-rules
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: ml.rules
+      rules:
+        - record: job:ml_error_rate:ratio
+          expr: |
+            sum(rate(ml_request_errors_total[5m])) /
+            sum(rate(ml_request_count[5m]))
+        - record: job:ml_p95_latency_seconds
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(ml_request_latency_seconds_bucket[5m])) by (le)
+            )

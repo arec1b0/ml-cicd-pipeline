@@ -59,10 +59,12 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
             REQUEST_ERRORS.labels(method=method, path=path).inc()
             REQUEST_COUNT.labels(method=method, path=path, status="500").inc()
             raise
+        finally:
+            # record latency for all requests (success and exception)
+            latency = time.time() - start
+            REQUEST_LATENCY.labels(method=method, path=path).observe(latency)
 
-        # record metrics
-        latency = time.time() - start
-        REQUEST_LATENCY.labels(method=method, path=path).observe(latency)
+        # record remaining metrics (not in finally to avoid duplication if exception occurs)
         REQUEST_COUNT.labels(method=method, path=path, status=str(status_code)).inc()
         if 500 <= status_code < 600:
             REQUEST_ERRORS.labels(method=method, path=path).inc()
