@@ -25,8 +25,16 @@ _logger = logging.getLogger("drift-monitoring")
 
 
 def _normalise_destination(uri: str) -> str:
-    """
-    Convert file:// URIs to filesystem paths for pandas compatibility.
+    """Normalizes a URI by removing the "file://" prefix if present.
+
+    This is a helper function to ensure compatibility with libraries that
+    expect a filesystem path instead of a file URI.
+
+    Args:
+        uri: The URI to normalize.
+
+    Returns:
+        The normalized URI as a string.
     """
     if uri.startswith("file://"):
         return uri[len("file://") :]
@@ -34,14 +42,19 @@ def _normalise_destination(uri: str) -> str:
 
 
 def load_dataset_from_uri(uri: str) -> pd.DataFrame:
-    """
-    Load a dataset from a URI supporting local paths and fsspec-compatible schemes.
+    """Loads a dataset from a URI.
+
+    This function supports local file paths and fsspec-compatible remote
+    storage URIs (e.g., "s3://", "gs://").
+
     Args:
-        uri: Location of the dataset (CSV format).
+        uri: The URI of the dataset to load.
+
     Returns:
-        pandas DataFrame.
+        A pandas DataFrame containing the loaded dataset.
+
     Raises:
-        FileNotFoundError when the local file is absent.
+        FileNotFoundError: If the specified local file does not exist.
     """
     resolved = _normalise_destination(uri)
     if resolved.startswith(("s3://", "gs://", "az://", "azure://")) or "://" in resolved:
@@ -61,16 +74,22 @@ def persist_reference_dataset(
     destination: str | None = None,
     max_rows: int | None = None,
 ) -> str | None:
-    """
-    Persist the training/reference split so downstream jobs can detect drift.
+    """Persists a reference dataset for drift monitoring.
+
+    This function saves a dataset, typically a training or validation set,
+    to a specified location. This dataset can then be used as a baseline
+    for detecting data drift in production.
+
     Args:
-        features: 2D array-like of feature values.
-        targets: 1D array-like with labels. Optional if unavailable.
-        predictions: 1D array-like with model predictions. Optional.
-        destination: Optional override for REFERENCE_DATASET_URI env.
-        max_rows: Optional cap on number of rows to store.
+        features: A 2D sequence of feature vectors.
+        targets: A 1D sequence of target values.
+        predictions: An optional 1D sequence of model predictions.
+        destination: The URI to save the dataset to. If not provided, the
+                     `REFERENCE_DATASET_URI` environment variable is used.
+        max_rows: An optional maximum number of rows to save.
+
     Returns:
-        Location the dataset was written to, or None when disabled.
+        The URI where the dataset was saved, or None if persistence is disabled.
     """
     destination = destination or os.getenv(REFERENCE_DATASET_URI_ENV)
     if not destination:
@@ -121,15 +140,19 @@ def emit_prediction_log(
     predictions: Sequence[float | int],
     metadata: Mapping[str, object] | None = None,
 ) -> str:
-    """
-    Emit a JSON log line capturing the prediction request/response.
-    Structured logs can be scraped by Loki/Promtail or other log forwarders.
+    """Emits a JSON-formatted log entry for a prediction.
+
+    This function is designed to be used as a background task to log
+    prediction data. The structured JSON output is suitable for ingestion
+    by log analysis tools like Loki.
+
     Args:
-        features: Batch of features passed to the model.
-        predictions: Batch of predictions returned by the model.
-        metadata: Optional metadata such as request ID or model info.
+        features: The batch of feature vectors that were passed to the model.
+        predictions: The batch of predictions that were returned by the model.
+        metadata: Optional metadata to include in the log entry.
+
     Returns:
-        Generated event ID to assist correlating logs downstream.
+        The unique ID of the generated event.
     """
     event_id = str(uuid4())
     payload: dict[str, object] = {
