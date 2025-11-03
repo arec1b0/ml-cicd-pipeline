@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ml-model-chart.fullname" . }}-svc
+  labels:
+    app: {{ include "ml-model-chart.name" . }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.port }}
+      protocol: TCP
+  selector:
+    app: {{ include "ml-model-chart.name" . }}
+    release: stable

@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ml-model-server-cm
+  namespace: default
+data:
+  server.py: |
+    from prometheus_client import Counter, Histogram, Gauge, generate_latest
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import json, time, threading, sys
+
+    REQUEST_COUNT = Counter('ml_request_count', 'Total HTTP requests processed', ['method','path','status'])
+    REQUEST_ERRORS = Counter('ml_request_errors_total','Total HTTP 5xx responses',['method','path'])
+    REQUEST_LATENCY = Histogram('ml_request_latency_seconds','Request latency seconds',['method','path'])
+    MODEL_ACCURACY = Gauge('ml_model_accuracy','Current model accuracy')
+
+    # initial accuracy value (will be visible in Prometheus)
+    MODEL_ACCURACY.set(0.82)
+
+    class Handler(BaseHTTPRequestHandler):
+        def _set(self,status=200,content_type='application/json'):
+            self.send_response(status)
+            self.send_header('Content-type',content_type)
+            self.end_headers()
+
+        def do_GET(self):
+            start=time.time()
+            status=200
+            try:
+                if self.path == '/health' or self.path == '/health/':
+                    self._set(200,'application/json')
+                    self.wfile.write(b'{"status":"ok","ready":true}')
+                    status=200
+                elif self.path == '/metrics':
+                    payload = generate_latest()
+                    self._set(200,'text/plain; version=0.0.4')
+                    self.wfile.write(payload)
+                    status=200
+                else:
+                    self._set(404,'application/json')
+                    self.wfile.write(b'{"error":"not found"}')
+                    status=404
+            except Exception:
+                REQUEST_ERRORS.labels(method='GET',path=self.path).inc()
+                self._set(500,'application/json')
+                self.wfile.write(b'{"error":"internal"}')
+                status=500
+            finally:
+                REQUEST_COUNT.labels(method='GET',path=self.path,status=str(status)).inc()
+                REQUEST_LATENCY.labels(method='GET',path=self.path).observe(time.time()-start)
+
+        def do_POST(self):
+            start=time.time()
+            status=200
+            try:
+                length = int(self.headers.get('content-length', 0))
+                body = self.rfile.read(length) if length else b''
+                # simulate a prediction call that updates request counters and latency
+                MODEL_ACCURACY.set(0.85)
+                self._set(200,'application/json')
+                self.wfile.write(json.dumps({"predictions":[0]}).encode())
+                status=200
+            except Exception:
+                REQUEST_ERRORS.labels(method='POST',path=self.path).inc()
+                self._set(500,'application/json')
+                self.wfile.write(b'{"error":"internal"}')
+                status=500
+            finally:
+                REQUEST_COUNT.labels(method='POST',path=self.path,status=str(status)).inc()
+                REQUEST_LATENCY.labels(method='POST',path=self.path).observe(time.time()-start)
+
+    def run():
+        httpd = HTTPServer(('0.0.0.0', 8000), Handler)
+        print("Starting test inference server on 0.0.0.0:8000", file=sys.stderr)
+        httpd.serve_forever()
+
+    if __name__ == '__main__':
+        run()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-model-deployment
+  namespace: default
+  labels:
+    app: ml-model
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-model
+  template:
+    metadata:
+      labels:
+        app: ml-model
+    spec:
+      containers:
+        - name: ml-model
+          image: python:3.11-slim
+          command: ["/bin/sh","-c","pip install prometheus_client && python /app/server.py"]
+          ports:
+            - containerPort: 8000
+              name: http
+          volumeMounts:
+            - name: server-code
+              mountPath: /app
+      volumes:
+        - name: server-code
+          configMap:
+            name: ml-model-server-cm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-model-svc
+  namespace: default
+  labels:
+    app: ml-model
+spec:
+  selector:
+    app: ml-model
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

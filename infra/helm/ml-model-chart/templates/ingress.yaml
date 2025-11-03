@@ -1,0 +1,41 @@
+{{- $full := include "ml-model-chart.fullname" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $full }}-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $full }}-svc
+                port:
+                  number: {{ .Values.service.port }}
+---
+{{- if .Values.canary.enabled }}
+# Canary ingress sends weighted traffic to canary backend using nginx annotations.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $full }}-canary-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "{{ .Values.canary.weight }}"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $full }}-canary-svc
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

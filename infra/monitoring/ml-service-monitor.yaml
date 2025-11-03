@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ml-model-servicemonitor
+  namespace: monitoring
+  labels:
+    release: prometheus   # must match prometheus serviceMonitorSelector
+spec:
+  selector:
+    matchNames:
+      - ml-model-svc         # CHANGE THIS if your service has a different name
+  namespaceSelector:
+    matchNames:
+      - default             # CHANGE THIS if your app is deployed in another namespace
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      honorLabels: true

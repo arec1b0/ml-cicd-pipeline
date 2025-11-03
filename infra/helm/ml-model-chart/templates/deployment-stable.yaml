@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ml-model-chart.fullname" . }}-stable
+  labels:
+    app: {{ include "ml-model-chart.name" . }}
+    release: stable
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "ml-model-chart.name" . }}
+      release: stable
+  template:
+    metadata:
+      labels:
+        app: {{ include "ml-model-chart.name" . }}
+        release: stable
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /health/
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
