@@ -22,16 +22,22 @@ COPY src /app/src
 COPY docker/download_model.py /app/download_model.py
 
 # Download model from MLflow Model Registry during build
+# Downloads all artifacts (both sklearn .pkl and ONNX .onnx if available)
 ARG MODEL_URI
 ARG MLFLOW_TRACKING_URI=http://localhost:5000
 ENV MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
-RUN python /app/download_model.py --model-uri "${MODEL_URI}" --dst-path /app/model
+RUN if [ -n "${MODEL_URI}" ]; then \
+      python /app/download_model.py --model-uri "${MODEL_URI}" --dst-path /app/model; \
+    else \
+      echo "ERROR: MODEL_URI must be set"; exit 1; \
+    fi
 
 # Expose default FastAPI port
 EXPOSE 8000
 
 # Default env var pointing to model path downloaded from MLflow
-# MLflow creates subdirectory structure: /app/model/model/model.pkl
+# MLflow creates subdirectory structure: /app/model/model/model.pkl or /app/model/model_onnx/model.onnx
+# The inference code will try ONNX first, then fall back to .pkl
 ENV MODEL_PATH=/app/model/model/model.pkl
 ENV LOG_LEVEL=INFO
 

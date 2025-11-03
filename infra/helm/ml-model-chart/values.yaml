@@ -16,10 +16,68 @@ canary:
   replicaCount: 1
   weight: 10  # percentage routed to canary via ingress annotation
 
-resources: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# HorizontalPodAutoscaler configuration
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 75
+  canaryMinReplicas: 1
+
+# PodDisruptionBudget configuration
+pdb:
+  enabled: true
+  # minAvailable can be a number (e.g., 1) or percentage (e.g., "50%")
+  minAvailable: 1
+  canaryMinAvailable: 1
+
+# NetworkPolicy configuration
+networkPolicy:
+  enabled: true
+  ingressController:
+    namespace: ingress-nginx
+    namespaceLabels: {}
+    podLabels:
+      app.kubernetes.io/name: ingress-nginx
+  prometheus:
+    enabled: true
+    namespace: monitoring
+    namespaceLabels: {}
+    podLabels:
+      app: prometheus
+  egress:
+    mlflow:
+      enabled: false
+      namespace: default
+      namespaceLabels: {}
+      podLabels:
+        app: mlflow
+      port: 5000
+    loki:
+      enabled: false
+      namespace: monitoring
+      namespaceLabels: {}
+      podLabels:
+        app: loki
+      port: 3100
+    jaeger:
+      enabled: false
+      namespace: monitoring
+      namespaceLabels: {}
+      podLabels:
+        app: jaeger
+      port: 14268
 
 env:
   logLevel: INFO

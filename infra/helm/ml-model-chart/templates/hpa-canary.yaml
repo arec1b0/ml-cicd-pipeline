@@ -1,0 +1,24 @@
+{{- if and .Values.canary.enabled .Values.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "ml-model-chart.fullname" . }}-canary-hpa
+  labels:
+    app: {{ include "ml-model-chart.name" . }}
+    release: canary
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "ml-model-chart.fullname" . }}-canary
+  minReplicas: {{ .Values.hpa.canaryMinReplicas | default 1 }}
+  maxReplicas: {{ .Values.hpa.maxReplicas | default 10 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.hpa.targetCPUUtilizationPercentage | default 75 }}
+{{- end }}
+

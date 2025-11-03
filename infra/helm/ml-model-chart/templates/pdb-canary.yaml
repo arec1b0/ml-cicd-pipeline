@@ -1,0 +1,22 @@
+{{- if and .Values.canary.enabled .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ml-model-chart.fullname" . }}-canary-pdb
+  labels:
+    app: {{ include "ml-model-chart.name" . }}
+    release: canary
+spec:
+  {{- if .Values.pdb.canaryMinAvailable }}
+  minAvailable: {{ .Values.pdb.canaryMinAvailable }}
+  {{- else if .Values.pdb.canaryMinAvailablePercent }}
+  minAvailable: {{ .Values.pdb.canaryMinAvailablePercent }}
+  {{- else }}
+  minAvailable: 1
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ include "ml-model-chart.name" . }}
+      release: canary
+{{- end }}
+

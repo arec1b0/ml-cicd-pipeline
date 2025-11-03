@@ -1,0 +1,160 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ml-model-chart.fullname" . }}-networkpolicy
+  labels:
+    app: {{ include "ml-model-chart.name" . }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ include "ml-model-chart.name" . }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from Ingress Controller (nginx)
+    # Match pods by labels - ingress controller typically runs in ingress-nginx namespace
+    - from:
+        {{- if .Values.networkPolicy.ingressController.namespaceLabels }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.namespaceLabels | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.ingressController.podLabels }}
+              {{- toYaml .Values.networkPolicy.ingressController.podLabels | nindent 16 }}
+              {{- else }}
+              app.kubernetes.io/name: ingress-nginx
+              {{- end }}
+        {{- else }}
+        - podSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.ingressController.podLabels }}
+              {{- toYaml .Values.networkPolicy.ingressController.podLabels | nindent 14 }}
+              {{- else }}
+              app.kubernetes.io/name: ingress-nginx
+              {{- end }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    # Allow ingress from Prometheus for metrics scraping
+    {{- if .Values.networkPolicy.prometheus.enabled }}
+    - from:
+        {{- if .Values.networkPolicy.prometheus.namespaceLabels }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.prometheus.namespaceLabels | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.prometheus.podLabels }}
+              {{- toYaml .Values.networkPolicy.prometheus.podLabels | nindent 16 }}
+              {{- else }}
+              app: prometheus
+              {{- end }}
+        {{- else }}
+        - podSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.prometheus.podLabels }}
+              {{- toYaml .Values.networkPolicy.prometheus.podLabels | nindent 14 }}
+              {{- else }}
+              app: prometheus
+              {{- end }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    {{- end }}
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow egress to MLflow (if configured)
+    {{- if .Values.networkPolicy.egress.mlflow.enabled }}
+    - to:
+        {{- if .Values.networkPolicy.egress.mlflow.namespaceLabels }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.mlflow.namespaceLabels | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.egress.mlflow.podLabels }}
+              {{- toYaml .Values.networkPolicy.egress.mlflow.podLabels | nindent 16 }}
+              {{- else }}
+              app: mlflow
+              {{- end }}
+        {{- else }}
+        - podSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.egress.mlflow.podLabels }}
+              {{- toYaml .Values.networkPolicy.egress.mlflow.podLabels | nindent 14 }}
+              {{- else }}
+              app: mlflow
+              {{- end }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.mlflow.port | default 5000 }}
+    {{- end }}
+    # Allow egress to Loki (if configured)
+    {{- if .Values.networkPolicy.egress.loki.enabled }}
+    - to:
+        {{- if .Values.networkPolicy.egress.loki.namespaceLabels }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.loki.namespaceLabels | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.egress.loki.podLabels }}
+              {{- toYaml .Values.networkPolicy.egress.loki.podLabels | nindent 16 }}
+              {{- else }}
+              app: loki
+              {{- end }}
+        {{- else }}
+        - podSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.egress.loki.podLabels }}
+              {{- toYaml .Values.networkPolicy.egress.loki.podLabels | nindent 14 }}
+              {{- else }}
+              app: loki
+              {{- end }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.loki.port | default 3100 }}
+    {{- end }}
+    # Allow egress to Jaeger (if configured)
+    {{- if .Values.networkPolicy.egress.jaeger.enabled }}
+    - to:
+        {{- if .Values.networkPolicy.egress.jaeger.namespaceLabels }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.jaeger.namespaceLabels | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.egress.jaeger.podLabels }}
+              {{- toYaml .Values.networkPolicy.egress.jaeger.podLabels | nindent 16 }}
+              {{- else }}
+              app: jaeger
+              {{- end }}
+        {{- else }}
+        - podSelector:
+            matchLabels:
+              {{- if .Values.networkPolicy.egress.jaeger.podLabels }}
+              {{- toYaml .Values.networkPolicy.egress.jaeger.podLabels | nindent 14 }}
+              {{- else }}
+              app: jaeger
+              {{- end }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.jaeger.port | default 14268 }}
+    {{- end }}
+{{- end }}
+

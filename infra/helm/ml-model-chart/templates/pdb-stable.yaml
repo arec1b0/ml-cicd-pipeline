@@ -1,0 +1,22 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ml-model-chart.fullname" . }}-stable-pdb
+  labels:
+    app: {{ include "ml-model-chart.name" . }}
+    release: stable
+spec:
+  {{- if .Values.pdb.minAvailable }}
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  {{- else if .Values.pdb.minAvailablePercent }}
+  minAvailable: {{ .Values.pdb.minAvailablePercent }}
+  {{- else }}
+  minAvailable: 1
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ include "ml-model-chart.name" . }}
+      release: stable
+{{- end }}
+
