@@ -13,6 +13,8 @@ env:
   CHART_PATH: infra/helm/ml-model-chart
   RELEASE_NAME: ml-model
   OBSERVATION_PORT: 18080
+  MODEL_REGISTRY_NAME: iris-random-forest
+  MODEL_STAGE: production
 
 jobs:
   build-and-push:
@@ -42,8 +44,12 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
+          file: docker/Dockerfile
           push: true
           tags: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}
+          build-args: |
+            MODEL_URI=models:/${{ env.MODEL_REGISTRY_NAME }}/${{ env.MODEL_STAGE }}
+            MLFLOW_TRACKING_URI=${{ secrets.MLFLOW_TRACKING_URI }}
       - name: Set image output
         run: echo "::set-output name=image::${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}"
 

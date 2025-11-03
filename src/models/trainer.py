@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Tuple
 import joblib
+import mlflow
+from mlflow.models.signature import infer_signature
 from sklearn.datasets import load_iris
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -21,7 +23,7 @@ class TrainResult:
 
 def train(output_path: Path) -> TrainResult:
     """
-    Train a simple RandomForest on Iris dataset and persist the model.
+    Train a simple RandomForest on Iris dataset and log to MLflow.
     Args:
         output_path: Path to write the trained model (file).
     Returns:
@@ -34,6 +36,23 @@ def train(output_path: Path) -> TrainResult:
     preds = model.predict(X_val)
     acc = float(accuracy_score(y_val, preds))
 
+    # Log to MLflow
+    with mlflow.start_run():
+        mlflow.log_param("n_estimators", 10)
+        mlflow.log_param("test_size", 0.2)
+        mlflow.log_param("random_state", 42)
+        mlflow.log_metric("accuracy", acc)
+        
+        # Infer model signature for better tracking
+        signature = infer_signature(X_val, preds)
+        mlflow.sklearn.log_model(
+            sk_model=model,
+            artifact_path="model",
+            signature=signature,
+            registered_model_name="iris-random-forest"
+        )
+
+    # Also save locally for backward compatibility and testing
     output_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, output_path)
 
