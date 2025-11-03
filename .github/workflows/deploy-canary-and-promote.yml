@@ -113,6 +113,8 @@ jobs:
             helm uninstall $RELEASE_NAME-canary || true
             exit 1
           fi
+          # export METRIC for Python subprocess
+          export METRIC
           # evaluate threshold using Python for robust float comparison
           python - <<PY
 import os,sys
@@ -131,8 +133,6 @@ else:
     sys.exit(3)
 PY
         shell: bash
-        env:
-          METRIC: ${{ steps.evaluate_metric.outputs.METRIC || '' }}
 
       - name: Promote canary to stable
         if: ${{ success() }}
