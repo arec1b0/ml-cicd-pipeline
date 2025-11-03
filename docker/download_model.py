@@ -7,6 +7,7 @@ Used during Docker image build to fetch the production model.
 import mlflow
 import click
 import logging
+import os
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +41,13 @@ def download_model(model_uri: str, dst_path: str) -> None:
         dst_path: Local destination path for the downloaded model
     """
     try:
+        tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+        if tracking_uri:
+            mlflow.set_tracking_uri(tracking_uri)
+            logger.info("Using MLflow tracking URI: %s", tracking_uri)
+        else:
+            logger.warning("MLFLOW_TRACKING_URI not set; using MLflow defaults.")
+
         logger.info(f"Downloading model from MLflow: {model_uri}")
         dst_path_obj = Path(dst_path)
         dst_path_obj.mkdir(parents=True, exist_ok=True)

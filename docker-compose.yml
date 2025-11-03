@@ -3,12 +3,12 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        MODEL_URI: ${MODEL_URI:-models:/iris-random-forest/Production}
+        MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://localhost:5000}
     image: ml-cicd-pipeline:local
     ports:
       - "8000:8000"
-    volumes:
-      - ./model_registry:/app/model_registry
     environment:
-      - MODEL_PATH=/app/model_registry/model.pkl
       - LOG_LEVEL=INFO
     restart: unless-stopped

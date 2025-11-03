@@ -236,8 +236,8 @@ app = create_app()
 ```
 
 **Startup Behavior:**
-- Attempts to load model from `MODEL_PATH` (default: `/app/model_registry/model.pkl`)
-- Loads metrics from `metrics.json` in the same directory
+- Attempts to load model from `MODEL_PATH` (default: `/app/model/model/model.pkl`)
+- Loads metrics from `metrics.json` in the same directory when present
 - Sets `app.state.is_ready = True` if model loads successfully
 - Sets Prometheus `MODEL_ACCURACY` gauge if accuracy is available
 
@@ -274,37 +274,42 @@ predictions = model.predict([[5.1, 3.5, 1.4, 0.2]])
 
 ---
 
-### `train(output_path: Path) -> TrainResult`
+### `train(output_path: Path | None = None, metrics_path: Path | None = None) -> TrainResult`
 
-Trains a RandomForest classifier on the Iris dataset and saves it to disk.
+Trains a RandomForest classifier on the Iris dataset, logs it to MLflow, and optionally writes local artefacts.
 
 **Parameters:**
-- `output_path` (Path): Path where the trained model will be saved (must be a file path, e.g., `model.pkl`)
+- `output_path` (Path | None): Optional path where the trained model will be saved (must be a file path, e.g., `model.pkl`)
+- `metrics_path` (Path | None): Optional path where validation metrics JSON will be written
 
 **Returns:**
 - `TrainResult`: Dataclass containing:
-  - `model_path` (Path): Path where the model was saved
   - `accuracy` (float): Validation accuracy (0.0-1.0)
+  - `run_id` (str): MLflow run ID
+  - `model_uri` (str): Registered MLflow model URI (`models:/<name>/<version or stage>`)
+  - `model_version` (str | None): Registered version when available
+  - `model_path` (Path | None): Optional local path where the model was saved
 
 **Side Effects:**
 - Creates parent directories if they don't exist
-- Saves model as pickle file
-- Saves `metrics.json` in the same directory with accuracy
+- Saves model as pickle file when `output_path` provided
+- Saves `metrics.json` next to `output_path` (or at `metrics_path`) with accuracy
+- Registers the model to MLflow using environment variables (`MLFLOW_TRACKING_URI`, etc.)
 
 **Usage:**
 ```python
 from pathlib import Path
 from src.models.trainer import train
 
-result = train(Path("model_registry/model.pkl"))
-print(f"Model saved with accuracy: {result.accuracy:.4f}")
+result = train()
+print(f"Registered {result.model_uri} with accuracy: {result.accuracy:.4f}")
 ```
 
 **CLI Usage:**
 ```bash
 python -m src.models.trainer \
-  --output model_registry/model.pkl \
-  --metrics model_registry/metrics.json
+  --output tmp/model.pkl \
+  --metrics tmp/metrics.json
 ```
 
 **Training Details:**
@@ -323,7 +328,7 @@ python -m src.models.trainer \
 
 Path to the model pickle file.
 
-- **Default:** `/app/model_registry/model.pkl`
+- **Default:** `/app/model/model/model.pkl`
 - **Type:** String (path)
 - **Example:** `export MODEL_PATH=/workspace/models/my_model.pkl`
 
@@ -516,8 +521,11 @@ Dataclass for training function results.
 ```python
 @dataclass
 class TrainResult:
-    model_path: Path  # Where the model was saved
-    accuracy: float    # Validation accuracy (0.0-1.0)
+    accuracy: float
+    run_id: str
+    model_uri: str
+    model_version: str | None = None
+    model_path: Path | None = None
 ```
 
 ---
@@ -532,14 +540,14 @@ class TrainResult:
 from pathlib import Path
 from src.models.trainer import train
 
-result = train(Path("model_registry/model.pkl"))
-print(f"Model accuracy: {result.accuracy:.4f}")
+result = train()
+print(f"Model registered at {result.model_uri} with accuracy: {result.accuracy:.4f}")
 ```
 
 #### 2. Start the Service
 
 ```bash
-export MODEL_PATH=model_registry/model.pkl
+export MODEL_PATH=/app/model/model/model.pkl  # optional when using default
 export LOG_LEVEL=INFO
 uvicorn src.app.main:app --host 0.0.0.0 --port 8000
 ```
@@ -633,11 +641,12 @@ except requests.exceptions.HTTPError as e:
 
 ```bash
 # Build and run
-docker build -t ml-inference .
+docker build \
+  --build-arg MODEL_URI=models:/iris-random-forest/Production \
+  --build-arg MLFLOW_TRACKING_URI=http://localhost:5000 \
+  -t ml-inference .
 docker run -p 8000:8000 \
-  -e MODEL_PATH=/app/model_registry/model.pkl \
   -e LOG_LEVEL=INFO \
-  -v $(pwd)/model_registry:/app/model_registry \
   ml-inference
 
 # Test
@@ -652,7 +661,7 @@ kind: ConfigMap
 metadata:
   name: ml-inference-config
 data:
-  MODEL_PATH: "/app/model_registry/model.pkl"
+  MODEL_PATH: "/app/model/model/model.pkl"
   LOG_LEVEL: "INFO"
 ---
 apiVersion: apps/v1

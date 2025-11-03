@@ -21,7 +21,7 @@ raw data → validation → training → model registry → container image → 
 - `src/models/` — Train and inference wrappers around scikit-learn models.
 - `src/utils/telemetry.py` — Prometheus middleware and metrics definitions shared by the service.
 - `tests/` — Pytest suites (`tests/unit`, `tests/test_data_pipeline.py`) covering trainers, inference, and data contracts.
-- `model_registry/` — Sample artefacts (`model.pkl`, `metrics.json`) used by the inference app, CI smoke tests, and Helm chart defaults.
+- `mlruns/` — Local MLflow file store (optional) used when `MLFLOW_TRACKING_URI` is not overridden.
 - `scripts/` — Cross-platform helper scripts (Windows bootstrap, CI test runner, canary promotion helper).
 - `ci/` — Policy documents and runbooks consumed by operational teams.
 - `infra/` — Helm chart (`infra/helm/ml-model-chart/`) and monitoring manifests for cluster deployment.
@@ -34,10 +34,10 @@ raw data → validation → training → model registry → container image → 
 2. **Validation** is expected in `src/data/validators` (CLI invoked by `.github/workflows/data-validation.yml`). Tests ensure processed datasets exist under `data/processed/`.
 3. **Training** (`src/models/trainer.py`):
    - Pulls the Iris dataset from scikit-learn.
-   - Trains a RandomForest, evaluates accuracy, persists the model via Joblib.
-   - Writes a colocated `metrics.json` with validation accuracy for downstream gates.
-4. **Model registry**: Artefacts are stored in `model_registry/` locally; CI uploads them as workflow artefacts. The inference service reads from the same path via `MODEL_PATH`.
-5. **Promotion**: During deploy workflows, the packaged image references the Git SHA tag and is validated against live metrics before promotion.
+   - Trains a RandomForest, evaluates accuracy, and logs metrics + model artefacts to MLflow (`mlflow.sklearn.log_model`).
+   - Registers the model version under `MLFLOW_MODEL_NAME`, returning a resolvable `models:/...` URI for automation.
+4. **Model registry**: MLflow stores versions, stages, and metrics. GitHub Actions consume the emitted `MODEL_URI` (and MLflow webhooks emit `repository_dispatch` events) to trigger deployments.
+5. **Promotion**: During deploy workflows, the packaged image references the dispatched `MODEL_URI`, downloads the model during the Docker build, and is validated against live metrics before promotion.
 
 ## 4. Inference Service Architecture
 
@@ -58,14 +58,14 @@ raw data → validation → training → model registry → container image → 
 
 - `ci-lint-test.yml`: multi-OS job running Ruff, MyPy, and pytest on pushes/PRs to `main`.
 - `data-validation.yml`: on-demand or data changes; executes `python -m src.data.validators.cli --sample`.
-- `model-training.yml`: trains the model, uploads artefacts, and prepares the registry directory.
-- `deploy-canary-and-promote.yml`: builds/pushes an image, deploys a Kubernetes canary via Helm, runs smoke tests, evaluates `ml_model_accuracy ≥ 0.70`, and either promotes or rolls back.
+- `model-training.yml`: trains the model against MLflow, registers a new version, and surfaces the resulting `MODEL_URI` as a workflow output.
+- `deploy-canary-and-promote.yml`: consumes a `MODEL_URI` (via MLflow webhook or manual trigger), builds/pushes an image, deploys a Kubernetes canary via Helm, runs smoke tests, evaluates `ml_model_accuracy ≥ 0.70`, and either promotes or rolls back.
 
 All workflows rely on Poetry-managed dependencies (Python 3.11). Secrets configure container registry credentials and kubeconfig data.
 
 ## 6. Infrastructure Footprint
 
-- **Container image**: `docker/Dockerfile` installs requirements from `requirements.txt`, copies `src/`, and runs Uvicorn (`src.app.main:app`) on port 8000. A shared volume mounts the model registry (`docker-compose.yml`).
+- **Container image**: `docker/Dockerfile` installs requirements from `requirements.txt`, copies `src/`, downloads the specified MLflow model during build, and runs Uvicorn (`src.app.main:app`) on port 8000.
 - **Helm chart** (`infra/helm/ml-model-chart`):
   - Deploys stable and optional canary deployments/services.
   - Ingress resources support weighted canary routing via Nginx annotations.

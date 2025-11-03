@@ -14,5 +14,7 @@ def get_env(name: str, default: str | None = None) -> str | None:
     val = os.getenv(name, default)
     return val
 
-MODEL_PATH = Path(get_env("MODEL_PATH", "/app/model_registry/model.pkl"))
+DEFAULT_MODEL_PATH = "/app/model/model/model.pkl"
+# Override MODEL_PATH if you keep legacy layouts or local copies.
+MODEL_PATH = Path(get_env("MODEL_PATH", DEFAULT_MODEL_PATH))
 LOG_LEVEL = get_env("LOG_LEVEL", "INFO")

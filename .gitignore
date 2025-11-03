@@ -34,3 +34,11 @@ desktop.ini
 # Local secrets and credentials
 .env
 secrets.yaml
+
+# Model artifacts
+model_registry/
+*.pkl
+*.joblib
+*.onnx
+metrics.json
+mlruns/

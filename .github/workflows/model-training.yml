@@ -11,6 +11,9 @@ on:
 jobs:
   train:
     runs-on: ubuntu-latest
+    outputs:
+      model_uri: ${{ steps.train.outputs.model_uri }}
+      run_id: ${{ steps.train.outputs.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,13 +30,23 @@ jobs:
           poetry config virtualenvs.create false
           poetry install --no-interaction --no-ansi
 
-      - name: Run training
+      - name: Run training and register model with MLflow
+        id: train
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_EXPERIMENT_NAME: ${{ secrets.MLFLOW_EXPERIMENT_NAME }}
+          MLFLOW_MODEL_NAME: ${{ secrets.MLFLOW_MODEL_NAME }}
         run: |
-          mkdir -p model_registry
-          poetry run python -m src.models.trainer --output model_registry/model.pkl --metrics model_registry/metrics.json
-
-      - name: Upload trained model artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: trained-model
-          path: model_registry/
+          set -eo pipefail
+          OUTPUT=$(poetry run python -m src.models.trainer | tee /tmp/train.log)
+          echo "$OUTPUT"
+          MODEL_URI=$(echo "$OUTPUT" | grep -E 'MODEL_URI=' | tail -n1 | cut -d= -f2-)
+          if [ -z "$MODEL_URI" ]; then
+            echo "Failed to parse MODEL_URI from trainer output."
+            exit 1
+          fi
+          RUN_ID=$(echo "$OUTPUT" | grep -E 'run_id=' | head -n1 | sed -n 's/.*run_id=\([^,)]*\).*/\1/p')
+          echo "model_uri=$MODEL_URI" >> "$GITHUB_OUTPUT"
+          if [ -n "$RUN_ID" ]; then
+            echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          fi

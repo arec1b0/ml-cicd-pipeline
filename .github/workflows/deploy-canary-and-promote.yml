@@ -2,8 +2,13 @@ name: Deploy Canary and Promote (with metrics gate)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
+    inputs:
+      model_uri:
+        description: "MLflow model URI to deploy (e.g. models:/iris-random-forest/Production)"
+        required: false
+  repository_dispatch:
+    types:
+      - mlflow-model-promoted
 
 permissions:
   contents: read
@@ -22,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.build.outputs.image }}
+      model_uri: ${{ steps.resolve-model.outputs.model_uri }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +45,23 @@ jobs:
           username: ${{ secrets.REGISTRY_USER }}
           password: ${{ secrets.REGISTRY_TOKEN }}
 
+      - name: Resolve model URI
+        id: resolve-model
+        env:
+          PAYLOAD_MODEL_URI: ${{ github.event.client_payload.model_uri }}
+          INPUT_MODEL_URI: ${{ github.event.inputs.model_uri }}
+        run: |
+          if [ -n "${PAYLOAD_MODEL_URI}" ]; then
+            MODEL_URI="${PAYLOAD_MODEL_URI}"
+          elif [ -n "${INPUT_MODEL_URI}" ]; then
+            MODEL_URI="${INPUT_MODEL_URI}"
+          else
+            MODEL_URI="models:/${{ env.MODEL_REGISTRY_NAME }}/${{ env.MODEL_STAGE }}"
+          fi
+          echo "Using MLflow model URI: ${MODEL_URI}"
+          echo "MODEL_URI=${MODEL_URI}" >> "$GITHUB_ENV"
+          echo "model_uri=${MODEL_URI}" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         id: build
         uses: docker/build-push-action@v4
@@ -48,15 +71,17 @@ jobs:
           push: true
           tags: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}
           build-args: |
-            MODEL_URI=models:/${{ env.MODEL_REGISTRY_NAME }}/${{ env.MODEL_STAGE }}
+            MODEL_URI=${{ env.MODEL_URI }}
             MLFLOW_TRACKING_URI=${{ secrets.MLFLOW_TRACKING_URI }}
       - name: Set image output
-        run: echo "::set-output name=image::${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}"
+        run: echo "image=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
   deploy-canary:
     name: Deploy canary and evaluate metrics
     needs: build-and-push
     runs-on: ubuntu-latest
+    env:
+      MODEL_URI: ${{ needs.build-and-push.outputs.model_uri }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

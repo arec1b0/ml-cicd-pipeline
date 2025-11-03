@@ -15,7 +15,7 @@ Enterprise-ready CI/CD blueprint for machine learning services. This repository 
 flowchart LR
     A[Raw / Prepared Data] -->|validate| B[Data Validators<br/>`src/data`]
     B -->|train| C[Model Trainer<br/>`src/models/trainer.py`]
-    C -->|emit artifacts| D[Model Registry<br/>`model_registry/`]
+    C -->|log model| D[MLflow Model Registry]
     D -->|package| E[Inference Image<br/>`docker/Dockerfile`]
     E -->|deploy| F[Kubernetes Stable + Canary<br/>`infra/helm/ml-model-chart`]
     F -->|observe| G[Telemetry & Observability<br/>Prometheus, Recording Rules]
@@ -39,18 +39,19 @@ See `docs/SET-UP.md` for detailed instructions, environment variables, and platf
 
 ### 3. Produce Artefacts & Run Service
 1. Generate or copy datasets into `data/processed/` (satisfies validation tests).
-2. Train the reference model: `poetry run python -m src.models.trainer --output model_registry/model.pkl --metrics model_registry/metrics.json`
+2. Point `MLFLOW_TRACKING_URI` (and optionally `MLFLOW_MODEL_NAME`, `MLFLOW_EXPERIMENT_NAME`) at your tracking server, then train and register a model: `poetry run python -m src.models.trainer`
+   - Add `--output <path>` if you also want a local artefact for ad-hoc testing.
 3. Start the API locally: `poetry run uvicorn src.app.main:app --reload --host 0.0.0.0 --port 8000`
 4. Validate via `GET /health/`, `POST /predict/`, and `GET /metrics/`.
 
-Containerised option: `docker compose up --build` mounts `model_registry/` and exposes port `8000`.
+Containerised option: `MODEL_URI=models:/iris-random-forest/Production MLFLOW_TRACKING_URI=http://localhost:5000 docker compose up --build` builds the image and exposes port `8000`.
 
 ## CI/CD Highlights
 
 - **Lint, type, test** (`.github/workflows/ci-lint-test.yml`): Runs Ruff, MyPy, and pytest across Linux and Windows runners.
 - **Data validation** (`data-validation.yml`): Executes validators when data assets change to catch schema drifts early.
-- **Model training** (`model-training.yml`): Automates training and publishes artefacts for downstream jobs.
-- **Canary deploy & promote** (`deploy-canary-and-promote.yml`): Builds/pushes images, deploys a Helm canary, runs smoke tests, evaluates `ml_model_accuracy ≥ 0.70`, and promotes or rolls back accordingly.
+- **Model training** (`model-training.yml`): Automates model retraining against MLflow, registers a new model version, and surfaces the resulting `MODEL_URI` for downstream automation.
+- **Canary deploy & promote** (`deploy-canary-and-promote.yml`): Reacts to MLflow `repository_dispatch` events (or manual triggers), builds/pushes images with the supplied `MODEL_URI`, deploys a Helm canary, runs smoke tests, evaluates `ml_model_accuracy ≥ 0.70`, and promotes or rolls back accordingly.
 
 These workflows assume registry credentials and kubeconfig secrets are configured in repository settings.
 
