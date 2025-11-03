@@ -1,7 +1,7 @@
 replicaCount: 2
 
 image:
-  repository: your-registry/ ml-cicd-pipeline-api
+  repository: your-registry/ml-cicd-pipeline-api
   tag: "latest"
   pullPolicy: IfNotPresent
 
