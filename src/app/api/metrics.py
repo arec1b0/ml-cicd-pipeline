@@ -10,7 +10,12 @@ router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 @router.get("/", include_in_schema=False)
 async def metrics():
-    """
-    Expose prometheus metrics.
+    """Exposes Prometheus metrics.
+
+    This endpoint is scraped by Prometheus to collect application and model
+    performance metrics.
+
+    Returns:
+        A Starlette Response object containing the Prometheus metrics.
     """
     return metrics_response()

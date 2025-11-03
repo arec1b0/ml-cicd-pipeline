@@ -28,6 +28,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TrainResult:
+    """Represents the result of a training run.
+
+    Attributes:
+        accuracy: The accuracy of the trained model on the validation set.
+        run_id: The ID of the MLflow run.
+        model_uri: The URI of the logged MLflow model.
+        model_version: The version of the registered model in MLflow.
+        model_path: The local path to the saved model file.
+        reference_dataset_uri: The URI of the persisted reference dataset for drift monitoring.
+    """
     accuracy: float
     run_id: str
     model_uri: str
@@ -37,12 +47,13 @@ class TrainResult:
 
 
 def _configure_mlflow() -> Tuple[str, str]:
-    """
-    Configure MLflow tracking and experiment from environment variables.
+    """Configures MLflow tracking and experiment settings from environment variables.
+
+    This function sets the MLflow tracking URI and experiment name. It also
+    determines the name for the registered model.
+
     Returns:
-        Tuple of (tracking_uri, registered_model_name)
-    Raises:
-        RuntimeError if required env vars missing.
+        A tuple containing the MLflow tracking URI and the registered model name.
     """
     tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
     if not tracking_uri:
@@ -58,13 +69,19 @@ def _configure_mlflow() -> Tuple[str, str]:
 
 
 def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = None) -> TrainResult:
-    """
-    Train a simple RandomForest on Iris dataset and log to MLflow.
+    """Trains a model, logs it to MLflow, and saves it locally.
+
+    This function trains a scikit-learn RandomForestClassifier on the Iris dataset,
+    logs the model and its metrics to MLflow, and optionally saves the model and
+    metrics to local files. It also persists a reference dataset for drift
+    monitoring.
+
     Args:
-        output_path: Optional path to write the trained model (file).
-        metrics_path: Optional path to write metrics JSON.
+        output_path: An optional path to save the trained model file.
+        metrics_path: An optional path to save the metrics as a JSON file.
+
     Returns:
-        TrainResult with MLflow metadata and optional saved path.
+        A TrainResult object containing metadata about the training run.
     """
     _, registered_model_name = _configure_mlflow()
 

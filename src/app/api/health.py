@@ -10,15 +10,30 @@ from pydantic import BaseModel
 router = APIRouter(prefix="/health", tags=["health"])
 
 class HealthResponse(BaseModel):
+    """Response model for the /health endpoint.
+
+    Attributes:
+        status: The overall status of the service (e.g., "ok").
+        ready: A boolean indicating if the model is loaded and ready for inference.
+        details: Optional dictionary containing additional details, such as model metrics.
+    """
     status: str
     ready: bool
     details: dict | None = None
 
 @router.get("/", response_model=HealthResponse)
 async def health(request: Request) -> HealthResponse:
-    """
-    Liveness and readiness combined endpoint.
-    Reads readiness flag and optional metrics from app.state.
+    """Performs a health and readiness check.
+
+    This endpoint is used to verify the service's liveness and readiness.
+    It checks the `is_ready` flag in the application state and includes
+    model metrics in the response if they are available.
+
+    Args:
+        request: The incoming FastAPI request object.
+
+    Returns:
+        HealthResponse: An object indicating the service's status and readiness.
     """
     app = request.app
     ready = bool(getattr(app.state, "is_ready", False))

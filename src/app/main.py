@@ -29,8 +29,15 @@ from src.app.api.middleware.correlation import CorrelationIDMiddleware
 from src.utils.tracing import initialize_tracing, instrument_fastapi
 
 def create_app() -> FastAPI:
-    """
-    Create FastAPI app and attach routes, telemetry, and model state.
+    """Initializes and configures the FastAPI application.
+
+    This function sets up logging, initializes OpenTelemetry tracing,
+    registers API routers, and attaches middleware for telemetry and
+    correlation IDs. It also defines startup and shutdown event handlers
+    to manage the model lifecycle.
+
+    Returns:
+        FastAPI: The configured FastAPI application instance.
     """
     # Setup structured JSON logging
     log_level = LOG_LEVEL or "INFO"
