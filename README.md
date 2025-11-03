@@ -9,6 +9,10 @@ Windows 11 friendly. Contains GitHub Actions workflows, Kubernetes Helm manifest
 2. Run `.\scripts\windows\setup.ps1` to prepare environment.
 3. See `.github/workflows/` for CI/CD pipeline definitions.
 
+## Documentation
+
+- **[API Documentation](API_DOCUMENTATION.md)** - Comprehensive documentation for all public APIs, functions, and components with examples and usage instructions.
+
 ## Conventions
 
 - Python 3.11
