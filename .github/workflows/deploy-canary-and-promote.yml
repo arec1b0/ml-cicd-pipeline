@@ -1,4 +1,4 @@
-name: Deploy Canary and Promote
+name: Deploy Canary and Promote (with metrics gate)
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
 env:
   CHART_PATH: infra/helm/ml-model-chart
   RELEASE_NAME: ml-model
-  KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
+  OBSERVATION_PORT: 18080
 
 jobs:
   build-and-push:
@@ -44,12 +44,11 @@ jobs:
           context: .
           push: true
           tags: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}
-          outputs: type=registry
       - name: Set image output
         run: echo "::set-output name=image::${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}"
 
   deploy-canary:
-    name: Deploy canary
+    name: Deploy canary and evaluate metrics
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
@@ -73,42 +72,71 @@ jobs:
           export KUBECONFIG=$(pwd)/kubeconfig
           kubectl version --client
 
-      - name: Helm upgrade stable (ensure app exists)
+      - name: Ensure stable exists (install/update)
         run: |
           export KUBECONFIG=$(pwd)/kubeconfig
           helm upgrade --install $RELEASE_NAME $CHART_PATH --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }}
 
-      - name: Helm deploy canary
+      - name: Deploy canary release (low weight)
         run: |
           export KUBECONFIG=$(pwd)/kubeconfig
           helm upgrade --install $RELEASE_NAME-canary $CHART_PATH --set canary.enabled=true --set canary.image.tag=${{ github.sha }} --set canary.weight=10
 
-      - name: Wait for canary startup
+      - name: Wait for canary pods ready
         run: |
           export KUBECONFIG=$(pwd)/kubeconfig
-          echo "Waiting 30s for canary pods..."
-          sleep 30
+          echo "Waiting for canary pods..."
+          kubectl wait --for=condition=available --timeout=120s deploy/$RELEASE_NAME-canary || true
+          sleep 10
 
-      - name: Run smoke tests against cluster
-        env:
-          KUBECONFIG: $(pwd)/kubeconfig
+      - name: Port-forward and run smoke tests
         run: |
           export KUBECONFIG=$(pwd)/kubeconfig
-          # Port-forward to service and perform health + predict smoke tests
-          # Run in background and wait
-          kubectl port-forward svc/${{ env.RELEASE_NAME }}-svc 18080:8000 --kubeconfig kubeconfig >/tmp/portfw.log 2>&1 &
-          sleep 3
+          kubectl port-forward svc/${{ env.RELEASE_NAME }}-svc ${{ env.OBSERVATION_PORT }}:8000 --kubeconfig kubeconfig >/tmp/portfw.log 2>&1 &
+          sleep 4
           set -e
-          curl -sS --fail http://127.0.0.1:18080/health/ || { echo "health failed"; exit 1; }
-          curl -sS --fail -X POST http://127.0.0.1:18080/predict/ -H "Content-Type: application/json" -d '{"features":[[5.1,3.5,1.4,0.2]]}' || { echo "predict failed"; exit 1; }
+          curl -sS --fail http://127.0.0.1:${{ env.OBSERVATION_PORT }}/health/ || { echo "health failed"; exit 1; }
+          curl -sS --fail -X POST http://127.0.0.1:${{ env.OBSERVATION_PORT }}/predict/ -H "Content-Type: application/json" -d '{"features":[[5.1,3.5,1.4,0.2]]}' || { echo "predict failed"; exit 1; }
           echo "smoke tests ok"
 
-      - name: Promote or rollback based on smoke tests
+      - name: Evaluate model accuracy metric and decide
         env:
-          KUBECONFIG: $(pwd)/kubeconfig
+          OBSERVATION_PORT: ${{ env.OBSERVATION_PORT }}
+        run: |
+          # fetch metrics text and parse ml_model_accuracy
+          METRIC=$(curl -sS http://127.0.0.1:${OBSERVATION_PORT}/metrics | awk '/^ml_model_accuracy /{print $2; exit}')
+          echo "raw ml_model_accuracy=$METRIC"
+          if [ -z "$METRIC" ]; then
+            echo "Metric ml_model_accuracy not found. Failing gate."
+            # uninstall canary before fail
+            export KUBECONFIG=$(pwd)/kubeconfig
+            helm uninstall $RELEASE_NAME-canary || true
+            exit 1
+          fi
+          # evaluate threshold using Python for robust float comparison
+          python - <<PY
+import os,sys
+try:
+    m=float(os.environ.get("METRIC","0"))
+except:
+    print("Cannot parse metric")
+    sys.exit(2)
+threshold=0.70
+print(f"ml_model_accuracy={m}, threshold={threshold}")
+if m >= threshold:
+    print("Metric threshold satisfied -> PROMOTE")
+    sys.exit(0)
+else:
+    print("Metric below threshold -> ROLLBACK")
+    sys.exit(3)
+PY
+        shell: bash
+        env:
+          METRIC: ${{ steps.evaluate_metric.outputs.METRIC || '' }}
+
+      - name: Promote canary to stable
+        if: ${{ success() }}
         run: |
           export KUBECONFIG=$(pwd)/kubeconfig
-          # If smoke tests passed, set stable image to canary and remove canary release
-          echo "Promoting canary to stable"
           helm upgrade --install $RELEASE_NAME $CHART_PATH --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }}
           helm uninstall $RELEASE_NAME-canary || true
