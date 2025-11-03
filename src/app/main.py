@@ -1,11 +1,7 @@
 """
 FastAPI application entrypoint for inference service.
 
-Responsibilities:
- - configure app
- - attach model wrapper to app.state on startup
- - register routers
- - expose uvicorn server when container runs CMD
+Now integrates telemetry middleware and metrics endpoint.
 """
 
 from __future__ import annotations
@@ -16,14 +12,15 @@ from typing import Optional
 import json
 
 from src.app.config import MODEL_PATH, LOG_LEVEL
-from src.models.infer import load_model  # uses joblib
+from src.models.infer import load_model
 from src.app.api.health import router as health_router
 from src.app.api.predict import router as predict_router
+from src.app.api.metrics import router as metrics_router
+from src.utils.telemetry import PrometheusMiddleware, MODEL_ACCURACY
 
 def create_app() -> FastAPI:
     """
-    Create and configure FastAPI app instance.
-    Loads model and optional metrics at startup and exposes state flags.
+    Create FastAPI app and attach routes, telemetry, and model state.
     """
     log_level = LOG_LEVEL or "INFO"
     logging.basicConfig(level=getattr(logging, log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
@@ -32,15 +29,14 @@ def create_app() -> FastAPI:
     # register routers
     app.include_router(health_router)
     app.include_router(predict_router)
+    app.include_router(metrics_router)
+
+    # attach telemetry middleware
+    app.add_middleware(PrometheusMiddleware)
 
     @app.on_event("startup")
     async def _startup():
-        """
-        Load model and metrics if available. Expose small set of state variables
-        on app.state that are free of the reserved 'model_' prefix to avoid
-        Pydantic protected namespace warnings.
-        """
-        # default state
+        # initialize state with names that avoid "model_" protected namespace
         app.state.ml_wrapper = None
         app.state.ml_metrics = None
         app.state.is_ready = False
@@ -50,7 +46,7 @@ def create_app() -> FastAPI:
             try:
                 mw = load_model(model_path)
                 app.state.ml_wrapper = mw
-                # try load metrics from sibling file metrics.json
+                # load metrics if available
                 metrics_path = model_path.parent / "metrics.json"
                 if metrics_path.exists():
                     try:
@@ -58,8 +54,16 @@ def create_app() -> FastAPI:
                             app.state.ml_metrics = json.load(fh)
                     except Exception:
                         app.state.ml_metrics = None
+                # set model accuracy gauge if available
+                acc = None
+                if isinstance(app.state.ml_metrics, dict) and "accuracy" in app.state.ml_metrics:
+                    try:
+                        acc = float(app.state.ml_metrics["accuracy"])
+                        MODEL_ACCURACY.set(acc)
+                    except Exception:
+                        pass
                 app.state.is_ready = True
-                logging.getLogger().info(f"Loaded model from {model_path}")
+                logging.getLogger().info(f"Loaded model from {model_path}, accuracy={acc}")
             except Exception as exc:
                 app.state.ml_wrapper = None
                 app.state.ml_metrics = None
@@ -70,14 +74,11 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     async def _shutdown():
-        """
-        Clean shutdown hooks.
-        """
         app.state.ml_wrapper = None
         app.state.ml_metrics = None
         app.state.is_ready = False
+        MODEL_ACCURACY.set(0)
 
     return app
 
-# expose app object for ASGI
 app = create_app()
