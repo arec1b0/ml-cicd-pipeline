@@ -1,20 +1,77 @@
 # ml-cicd-pipeline
 
-Senior-level CI/CD scaffold for ML models.  
-Windows 11 friendly. Contains GitHub Actions workflows, Kubernetes Helm manifests, MLflow integration, and Windows setup scripts.
+Enterprise-ready CI/CD blueprint for machine learning services. This repository demonstrates how to move a model from experimentation to production with reproducible assets, automated quality gates, and observable runtime behaviour across Windows and Linux environments.
 
-## Quick start (Windows PowerShell)
+## Why This Repository?
 
-1. Open PowerShell in project root.
-2. Run `.\scripts\windows\setup.ps1` to prepare environment.
-3. See `.github/workflows/` for CI/CD pipeline definitions.
+- **End-to-end workflow**: Covers data validation, training, packaging, deployment, and post-deploy gating in a single project.
+- **Platform agnostic**: First-class support for Windows (PowerShell) and Linux/macOS shells, plus containerised delivery.
+- **Production guardrails**: GitHub Actions pipelines enforce linting, typing, testing, data checks, model metrics thresholds, and canary promotion rules.
+- **Operational clarity**: Runbooks, policy docs, and monitoring manifests reflect the day-two realities of ML operations.
 
-## Documentation
+## Reference Architecture
 
-- **[API Documentation](API_DOCUMENTATION.md)** - Comprehensive documentation for all public APIs, functions, and components with examples and usage instructions.
+```mermaid
+flowchart LR
+    A[Raw / Prepared Data] -->|validate| B[Data Validators<br/>`src/data`]
+    B -->|train| C[Model Trainer<br/>`src/models/trainer.py`]
+    C -->|emit artifacts| D[Model Registry<br/>`model_registry/`]
+    D -->|package| E[Inference Image<br/>`docker/Dockerfile`]
+    E -->|deploy| F[Kubernetes Stable + Canary<br/>`infra/helm/ml-model-chart`]
+    F -->|observe| G[Telemetry & Observability<br/>Prometheus, Recording Rules]
+    G -->|feedback| B
+```
 
-## Conventions
+The inference surface is implemented with FastAPI (`src/app`), instrumented via Prometheus middleware (`src/utils/telemetry.py`), and fronted by Helm-managed stable/canary deployments. Deployments are gated on live metrics before promotion.
 
-- Python 3.11
-- Poetry preferred. Fallback to requirements.txt available.
-- SRP/OCP/LSP/ISP/DIP principles applied to code layout.
+## Quick Start
+
+### 1. Provision Tooling
+- Python **3.11**
+- Poetry 1.5+ (preferred) or virtualenv + `requirements.txt`
+- Docker, kubectl, Helm (for container and cluster workflows)
+
+### 2. Bootstrap Environment
+- **Windows**: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` then run `.\scripts\windows\setup.ps1`
+- **macOS/Linux**: `python -m pip install --upgrade pip && pip install poetry && poetry install`
+
+See `docs/SET-UP.md` for detailed instructions, environment variables, and platform nuances.
+
+### 3. Produce Artefacts & Run Service
+1. Generate or copy datasets into `data/processed/` (satisfies validation tests).
+2. Train the reference model: `poetry run python -m src.models.trainer --output model_registry/model.pkl --metrics model_registry/metrics.json`
+3. Start the API locally: `poetry run uvicorn src.app.main:app --reload --host 0.0.0.0 --port 8000`
+4. Validate via `GET /health/`, `POST /predict/`, and `GET /metrics/`.
+
+Containerised option: `docker compose up --build` mounts `model_registry/` and exposes port `8000`.
+
+## CI/CD Highlights
+
+- **Lint, type, test** (`.github/workflows/ci-lint-test.yml`): Runs Ruff, MyPy, and pytest across Linux and Windows runners.
+- **Data validation** (`data-validation.yml`): Executes validators when data assets change to catch schema drifts early.
+- **Model training** (`model-training.yml`): Automates training and publishes artefacts for downstream jobs.
+- **Canary deploy & promote** (`deploy-canary-and-promote.yml`): Builds/pushes images, deploys a Helm canary, runs smoke tests, evaluates `ml_model_accuracy ≥ 0.70`, and promotes or rolls back accordingly.
+
+These workflows assume registry credentials and kubeconfig secrets are configured in repository settings.
+
+## Repository Layout
+
+- `src/app/` — FastAPI application entrypoint, routers, and configuration.
+- `src/models/` — Training pipeline and inference wrappers around scikit-learn models.
+- `src/utils/telemetry.py` — Prometheus middleware and metrics exposure.
+- `tests/` — Unit tests plus data pipeline assertions for processed datasets.
+- `infra/helm/` — Helm chart for stable/canary deployments with ingress routing.
+- `infra/monitoring/` — Prometheus Operator manifests (ServiceMonitor, recording rules, exemplar deployment).
+- `scripts/` — Cross-platform automation (CI run scripts, Windows bootstrap, canary promote utility).
+- `ci/` — Policy guidance and runbooks aligned with the automated workflow.
+- `docs/` — Deep-dive documentation (`ARCHITECTURE.md`, `SET-UP.md`) complementing this README.
+
+> Tests and workflows expect a `src/data/validators` module implementing the CLI invoked during data validation. Add or adjust validators to align with your data sources.
+
+## Documentation & Further Reading
+
+- `docs/ARCHITECTURE.md` — Detailed architecture, component responsibilities, and operational context.
+- `docs/SET-UP.md` — Platform-specific setup, environment configuration, deployment paths, and quality gates.
+- `API_DOCUMENTATION.md` — Endpoint catalogue and usage patterns for the inference service.
+
+Stay aligned with the documentation when evolving the platform: changes to lifecycle, infra, or quality gates should be mirrored in the corresponding docs and runbooks.
