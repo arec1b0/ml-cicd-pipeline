@@ -23,6 +23,25 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.service.port }}
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.env.logLevel | default "INFO" | quote }}
+            - name: LOG_FORMAT
+              value: {{ .Values.env.logFormat | default "json" | quote }}
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            {{- if .Values.env.otelExporterOtlpEndpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.env.otelExporterOtlpEndpoint | quote }}
+            {{- end }}
+            {{- if .Values.env.otelServiceName }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.env.otelServiceName | quote }}
+            {{- end }}
+            {{- if .Values.env.otelResourceAttributes }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: {{ .Values.env.otelResourceAttributes | quote }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health/

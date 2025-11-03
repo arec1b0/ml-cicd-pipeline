@@ -50,6 +50,11 @@ pip install -r requirements.txt
 | `MLFLOW_EXPERIMENT_NAME` | MLflow experiment where training runs are recorded                          | `ml-cicd-pipeline`                        |
 | `MODEL_PATH`             | Model file path used by the inference service at runtime                    | `/app/model/model/model.pkl`              |
 | `LOG_LEVEL`              | Python logging level for the inference service                              | `INFO`                                    |
+| `LOG_FORMAT`             | Log output format: `json` (structured) or `text` (human-readable)            | `json`                                    |
+| `CORRELATION_ID_HEADER`  | HTTP header name for correlation ID (default: `X-Correlation-ID`)           | `X-Correlation-ID`                        |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP endpoint for traces (e.g., `http://tempo:4317`)      | _(not set)_                               |
+| `OTEL_SERVICE_NAME`      | Service name for distributed tracing                                         | `ml-cicd-pipeline`                        |
+| `OTEL_RESOURCE_ATTRIBUTES` | Additional resource attributes (format: `key1=value1,key2=value2`)    | _(not set)_                               |
 
 When running locally via Poetry (outside Docker), point to your MLflow server and optionally override the runtime path:
 
@@ -59,6 +64,9 @@ export MLFLOW_MODEL_NAME=iris-random-forest
 export MLFLOW_EXPERIMENT_NAME=ml-cicd-pipeline
 export MODEL_PATH="$(pwd)/mlruns/models--iris-random-forest/latest/model.pkl"
 export LOG_LEVEL=INFO
+export LOG_FORMAT=json
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_SERVICE_NAME=ml-cicd-pipeline
 ```
 
 PowerShell equivalent:
@@ -69,6 +77,9 @@ $env:MLFLOW_MODEL_NAME = "iris-random-forest"
 $env:MLFLOW_EXPERIMENT_NAME = "ml-cicd-pipeline"
 $env:MODEL_PATH = "$(Get-Location)\mlruns\models--iris-random-forest\latest\model.pkl"
 $env:LOG_LEVEL = "INFO"
+$env:LOG_FORMAT = "json"
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
+$env:OTEL_SERVICE_NAME = "ml-cicd-pipeline"
 ```
 
 ## 4. Preparing Data & Model Artefacts
@@ -130,9 +141,85 @@ All commands assume Poetry-managed environments; drop the `poetry run` prefix if
 
 ## 7. Observability & Monitoring
 
+### Metrics (Prometheus)
+
 - The service exports Prometheus metrics; scrape using the provided `infra/monitoring/ml-service-monitor.yaml`.
 - Recording rules for error rate and p95 latency live in `infra/monitoring/ml-recording-rules.yaml`.
 - For manual Windows-based deployments with metrics gating, use `scripts/windows/deploy-canary.ps1`.
+
+### Logs (Loki + Promtail)
+
+The application outputs structured JSON logs with correlation IDs for distributed request tracking.
+
+**Setup:**
+
+1. Deploy Loki and Promtail stack:
+   ```bash
+   helm repo add grafana https://grafana.github.io/helm-charts
+   helm repo update
+   helm install loki-stack grafana/loki-stack -n monitoring \
+     -f infra/monitoring/loki-stack-values.yaml \
+     --create-namespace
+   ```
+
+2. Promtail will automatically collect logs from pods labeled with `app: ml-cicd-pipeline` or `app: ml-model`.
+
+3. Logs are JSON-formatted and include:
+   - `correlation_id`: Unique ID per request (from `X-Correlation-ID` header)
+   - `level`: Log level (DEBUG, INFO, WARNING, ERROR)
+   - `logger`: Logger name
+   - `timestamp`: ISO format timestamp
+   - `message`: Log message
+
+### Traces (OpenTelemetry + Tempo/Jaeger)
+
+The application is instrumented with OpenTelemetry for distributed tracing.
+
+**Setup:**
+
+1. Deploy Tempo (recommended) or Jaeger:
+   ```bash
+   helm install tempo grafana/tempo-distributed -n monitoring \
+     -f infra/monitoring/tempo-values.yaml \
+     --create-namespace
+   ```
+
+2. Configure the application to send traces:
+   - Set `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable (e.g., `http://tempo:4317`)
+   - Update Helm values: `env.otelExporterOtlpEndpoint: "http://tempo:4317"`
+
+3. Custom spans are created for:
+   - HTTP requests (automatic via FastAPIInstrumentor)
+   - Model inference (`model_inference` span with ML-specific attributes)
+
+### Grafana Integration
+
+**Data Sources:**
+
+Apply the Grafana datasources configuration:
+```bash
+kubectl apply -f infra/monitoring/grafana-datasources.yaml
+```
+
+This configures:
+- **Prometheus**: Metrics querying
+- **Loki**: Log aggregation with correlation ID support
+- **Tempo**: Distributed traces
+
+**Log-to-Trace Correlation:**
+
+Grafana is configured to correlate logs and traces:
+- Click on a log entry with `correlation_id` → View related trace
+- Click on a trace → View related logs for that request
+
+**Trace Attributes:**
+
+Model inference spans include:
+- `ml.model.path`: Model file path
+- `ml.input.feature_count`: Number of input features
+- `ml.input.feature_dim`: Feature vector dimensions
+- `ml.output.prediction_count`: Number of predictions
+- `correlation.id`: Request correlation ID
 
 ## 8. Next Steps
 

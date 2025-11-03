@@ -18,3 +18,8 @@ DEFAULT_MODEL_PATH = "/app/model/model/model.pkl"
 # Override MODEL_PATH if you keep legacy layouts or local copies.
 MODEL_PATH = Path(get_env("MODEL_PATH", DEFAULT_MODEL_PATH))
 LOG_LEVEL = get_env("LOG_LEVEL", "INFO")
+LOG_FORMAT = get_env("LOG_FORMAT", "json")
+CORRELATION_ID_HEADER = get_env("CORRELATION_ID_HEADER", "X-Correlation-ID")
+OTEL_EXPORTER_OTLP_ENDPOINT = get_env("OTEL_EXPORTER_OTLP_ENDPOINT")
+OTEL_SERVICE_NAME = get_env("OTEL_SERVICE_NAME", "ml-cicd-pipeline")
+OTEL_RESOURCE_ATTRIBUTES = get_env("OTEL_RESOURCE_ATTRIBUTES")

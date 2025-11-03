@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        jsonData:
+          timeInterval: 15s
+      
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+        jsonData:
+          maxLines: 1000
+          derivedFields:
+            - datasourceUid: tempo
+              matcherRegex: "trace_id=(\\w+)"
+              name: TraceID
+              url: "$${__value.raw}"
+      
+      - name: Tempo
+        type: tempo
+        access: proxy
+        url: http://tempo:3200
+        uid: tempo
+        jsonData:
+          httpMethod: GET
+          tracesToLogs:
+            datasourceUid: loki
+            tags: ["job", "instance", "pod", "namespace"]
+            mappedTags:
+              - key: "service.name"
+                value: "service"
+            mapTagNamesEnabled: false
+            spanStartTimeShift: "1h"
+            spanEndTimeShift: "1h"
+            filterByTraceID: false
+            filterBySpanID: false
+          logsToTraces:
+            datasourceUid: loki
+            tags: ["job", "instance", "pod", "namespace"]
+            mappedTags:
+              - key: "service"
+                value: "service.name"
+            mapTagNamesEnabled: false
+            spanStartTimeShift: "-1h"
+            spanEndTimeShift: "-1h"
+            filterByTraceID: true
+            filterBySpanID: false
+          nodeGraph:
+            enabled: true
+          search:
+            hide: false
+          serviceMap:
+            datasourceUid: prometheus
+          traceQuery:
+            timeShiftEnabled: true
+            spanStartTimeShift: "1h"
+            spanEndTimeShift: "1h"
+

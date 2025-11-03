@@ -20,3 +20,10 @@ resources: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+env:
+  logLevel: INFO
+  logFormat: json
+  otelExporterOtlpEndpoint: ""  # Set to e.g., http://tempo:4317 for tracing
+  otelServiceName: ml-cicd-pipeline
+  otelResourceAttributes: "deployment.environment=production"

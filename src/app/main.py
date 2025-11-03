@@ -10,28 +10,67 @@ import logging
 from pathlib import Path
 import json
 
-from src.app.config import MODEL_PATH, LOG_LEVEL
+from src.app.config import (
+    MODEL_PATH,
+    LOG_LEVEL,
+    LOG_FORMAT,
+    CORRELATION_ID_HEADER,
+    OTEL_EXPORTER_OTLP_ENDPOINT,
+    OTEL_SERVICE_NAME,
+    OTEL_RESOURCE_ATTRIBUTES,
+)
 from src.models.infer import load_model
 from src.app.api.health import router as health_router
 from src.app.api.predict import router as predict_router
 from src.app.api.metrics import router as metrics_router
 from src.utils.telemetry import PrometheusMiddleware, MODEL_ACCURACY
+from src.utils.logging import setup_logging
+from src.app.api.middleware.correlation import CorrelationIDMiddleware
+from src.utils.tracing import initialize_tracing, instrument_fastapi
 
 def create_app() -> FastAPI:
     """
     Create FastAPI app and attach routes, telemetry, and model state.
     """
+    # Setup structured JSON logging
     log_level = LOG_LEVEL or "INFO"
-    logging.basicConfig(level=getattr(logging, log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
+    log_format = LOG_FORMAT or "json"
+    setup_logging(log_level=log_level, log_format=log_format)
+    
+    # Parse resource attributes if provided
+    resource_attrs = None
+    if OTEL_RESOURCE_ATTRIBUTES:
+        # Format: "key1=value1,key2=value2"
+        resource_attrs = {}
+        for pair in OTEL_RESOURCE_ATTRIBUTES.split(","):
+            if "=" in pair:
+                key, value = pair.split("=", 1)
+                resource_attrs[key.strip()] = value.strip()
+    
+    # Initialize OpenTelemetry tracing
+    if OTEL_EXPORTER_OTLP_ENDPOINT:
+        initialize_tracing(
+            service_name=OTEL_SERVICE_NAME or "ml-cicd-pipeline",
+            service_version="0.1.0",
+            otlp_endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+            resource_attributes=resource_attrs,
+        )
+    
     app = FastAPI(title="ml-cicd-pipeline-inference", version="0.1.0")
+    
+    # Instrument FastAPI with OpenTelemetry (must be before middleware registration)
+    instrument_fastapi(app)
 
     # register routers
     app.include_router(health_router)
     app.include_router(predict_router)
     app.include_router(metrics_router)
 
-    # attach telemetry middleware
+    # attach middleware - correlation ID must be first for context
+    # Note: In FastAPI/Starlette, middleware added last executes first
+    # So we add PrometheusMiddleware first, then CorrelationIDMiddleware to ensure correlation ID runs first
     app.add_middleware(PrometheusMiddleware)
+    app.add_middleware(CorrelationIDMiddleware, header_name=CORRELATION_ID_HEADER)
 
     @app.on_event("startup")
     async def _startup():
@@ -67,15 +106,31 @@ def create_app() -> FastAPI:
                     "model_path": str(model_path),
                     "metrics": app.state.ml_metrics,
                 }
-                logging.getLogger().info(f"Loaded model from {model_path}, accuracy={acc}")
+                logger = logging.getLogger(__name__)
+                logger.info(
+                    "Loaded model successfully",
+                    extra={
+                        "model_path": str(model_path),
+                        "accuracy": acc,
+                        "metrics_available": app.state.ml_metrics is not None,
+                    }
+                )
             except Exception as exc:
                 app.state.ml_wrapper = None
                 app.state.ml_metrics = None
                 app.state.model_metadata = None
                 app.state.is_ready = False
-                logging.getLogger().exception(f"Failed to load model: {exc}")
+                logger = logging.getLogger(__name__)
+                logger.exception(
+                    "Failed to load model",
+                    extra={"model_path": str(model_path), "error": str(exc)}
+                )
         else:
-            logging.getLogger().warning(f"Model file not found at {model_path}")
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "Model file not found",
+                extra={"model_path": str(model_path)}
+            )
 
     @app.on_event("shutdown")
     async def _shutdown():

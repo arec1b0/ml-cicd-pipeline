@@ -1,0 +1,70 @@
+# Helm values for Loki Stack deployment
+# Deploy with: helm repo add grafana https://grafana.github.io/helm-charts
+#              helm install loki-stack grafana/loki-stack -n monitoring -f infra/monitoring/loki-stack-values.yaml
+
+loki:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: standard
+  config:
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+    storage_config:
+      boltdb_shipper:
+        active_index_directory: /loki/boltdb-shipper-active
+        cache_location: /loki/boltdb-shipper-cache
+        shared_store: filesystem
+      filesystem:
+        directory: /loki/chunks
+    limits_config:
+      retention_period: 168h  # 7 days
+      ingestion_rate_mb: 10
+      ingestion_burst_size_mb: 20
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9096
+
+promtail:
+  enabled: true
+  config:
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+    snippets:
+      scrapeConfigs: |
+        - job_name: kubernetes-pods
+          kubernetes_sd_configs:
+            - role: pod
+          pipeline_stages:
+            - json:
+                expressions:
+                  correlation_id: correlation_id
+                  level: level
+                  logger: logger
+            - labels:
+                correlation_id:
+                level:
+                logger:
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_name]
+              target_label: pod
+            - source_labels: [__meta_kubernetes_namespace]
+              target_label: namespace
+            - source_labels: [__meta_kubernetes_pod_label_app]
+              target_label: app
+            - action: keep
+              regex: ml-cicd-pipeline|ml-model
+              source_labels:
+                - __meta_kubernetes_pod_label_app
+
+grafana:
+  enabled: false  # Assume Grafana is deployed separately
+

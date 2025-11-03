@@ -1,0 +1,80 @@
+# Helm values for Grafana Tempo deployment
+# Deploy with: helm repo add grafana https://grafana.github.io/helm-charts
+#              helm install tempo grafana/tempo-distributed -n monitoring -f infra/monitoring/tempo-values.yaml
+
+tempo:
+  serviceName: tempo
+  storage:
+    trace:
+      backend: s3  # Change to 'local' for local filesystem
+      s3:
+        bucket: tempo-traces  # Adjust to your S3 bucket
+        endpoint: s3.amazonaws.com  # Adjust to your S3 endpoint
+      pool:
+        max_workers: 100
+      wal:
+        path: /var/tempo/wal
+  replicationFactor: 1
+  metricsGenerator:
+    enabled: true
+    registry:
+      external_labels:
+        source: tempo
+        cluster: kubernetes
+
+ingester:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+distributor:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+querier:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+compactor:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+service:
+  type: ClusterIP
+  ports:
+    otlp:
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    http:
+      port: 3200
+      targetPort: 3200
+      protocol: TCP
+    tempo:
+      port: 3100
+      targetPort: 3100
+      protocol: TCP
+
