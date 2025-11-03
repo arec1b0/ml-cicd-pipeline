@@ -1,0 +1,31 @@
+name: Data Validation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/data/**"
+      - "data/**"
+
+jobs:
+  validate-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry
+          poetry config virtualenvs.create false
+          poetry install --no-interaction --no-ansi
+
+      - name: Run data validation
+        run: |
+          poetry run python -m src.data.validators.cli --sample
