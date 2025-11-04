@@ -1,6 +1,6 @@
 # Production-ready minimal image for the inference service.
 # Uses Python 3.11 slim image and installs pip requirements.
-# The container expects a model file downloaded from MLflow during build.
+# Models are pulled at runtime via the ModelManager, so the image contains only application code.
 FROM python:3.11-slim
 
 # Do not write .pyc files and run in unbuffered mode
@@ -18,27 +18,14 @@ RUN python -m pip install --upgrade pip \
 # Copy application code
 COPY src /app/src
 
-# Copy MLflow download script
-COPY docker/download_model.py /app/download_model.py
-
-# Download model from MLflow Model Registry during build
-# Downloads all artifacts (both sklearn .pkl and ONNX .onnx if available)
-ARG MODEL_URI
-ARG MLFLOW_TRACKING_URI=http://localhost:5000
-ENV MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
-RUN if [ -n "${MODEL_URI}" ]; then \
-      python /app/download_model.py --model-uri "${MODEL_URI}" --dst-path /app/model; \
-    else \
-      echo "ERROR: MODEL_URI must be set"; exit 1; \
-    fi
+# Prepare a writable cache directory for runtime model downloads
+RUN mkdir -p /var/cache/ml-model
 
 # Expose default FastAPI port
 EXPOSE 8000
 
-# Default env var pointing to model path downloaded from MLflow
-# MLflow creates subdirectory structure: /app/model/model/model.pkl or /app/model/model_onnx/model.onnx
-# The inference code will try ONNX first, then fall back to .pkl
-ENV MODEL_PATH=/app/model/model/model.pkl
+ENV MODEL_SOURCE=mlflow
+ENV MODEL_CACHE_DIR=/var/cache/ml-model
 ENV LOG_LEVEL=INFO
 
 # Start uvicorn server. Use host 0.0.0.0 so container accepts external connections.

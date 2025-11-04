@@ -43,26 +43,38 @@ pip install -r requirements.txt
 
 ## 3. Environment Variables
 
-| Variable                 | Description                                                                 | Default                                   |
-|--------------------------|-----------------------------------------------------------------------------|-------------------------------------------|
-| `MLFLOW_TRACKING_URI`    | MLflow tracking URI (file path, HTTP(S), or Databricks URI)                 | `file://<repo-root>/mlruns` (local fallback) |
-| `MLFLOW_MODEL_NAME`      | Registered model name for the trainer and deploy workflows                  | `iris-random-forest`                      |
-| `MLFLOW_EXPERIMENT_NAME` | MLflow experiment where training runs are recorded                          | `ml-cicd-pipeline`                        |
-| `MODEL_PATH`             | Model file path used by the inference service at runtime                    | `/app/model/model/model.pkl`              |
-| `LOG_LEVEL`              | Python logging level for the inference service                              | `INFO`                                    |
-| `LOG_FORMAT`             | Log output format: `json` (structured) or `text` (human-readable)            | `json`                                    |
-| `CORRELATION_ID_HEADER`  | HTTP header name for correlation ID (default: `X-Correlation-ID`)           | `X-Correlation-ID`                        |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP endpoint for traces (e.g., `http://tempo:4317`)      | _(not set)_                               |
-| `OTEL_SERVICE_NAME`      | Service name for distributed tracing                                         | `ml-cicd-pipeline`                        |
-| `OTEL_RESOURCE_ATTRIBUTES` | Additional resource attributes (format: `key1=value1,key2=value2`)    | _(not set)_                               |
+| Variable                     | Description                                                                                   | Default                                              |
+|------------------------------|-----------------------------------------------------------------------------------------------|------------------------------------------------------|
+| `MLFLOW_TRACKING_URI`        | MLflow tracking URI (file path, HTTP(S), or Databricks URI)                                   | `file://<repo-root>/mlruns` (local fallback)         |
+| `MLFLOW_MODEL_NAME`          | Registered model name for the trainer and deploy workflows                                    | `iris-random-forest`                                 |
+| `MLFLOW_MODEL_STAGE`         | MLflow stage (`Production`, `Staging`, etc.) served by default                                | `Production`                                         |
+| `MLFLOW_MODEL_VERSION`       | Optional explicit model version override                                                      | _(not set)_                                          |
+| `MLFLOW_EXPERIMENT_NAME`     | MLflow experiment where training runs are recorded                                            | `ml-cicd-pipeline`                                   |
+| `MODEL_SOURCE`               | Model source: `mlflow` (runtime download) or `local` (filesystem path)                        | `mlflow`                                             |
+| `MODEL_PATH`                 | Local model file path used when `MODEL_SOURCE=local`                                           | `/app/model/model/model.pkl`                         |
+| `MODEL_CACHE_DIR`            | Writable directory for runtime downloads                                                       | `/var/cache/ml-model`                                |
+| `MODEL_AUTO_REFRESH_SECONDS` | Interval (seconds) for background polling of MLflow (`0` disables auto-refresh)               | `0`                                                  |
+| `MLFLOW_TRACKING_USERNAME`   | Optional username for authenticated MLflow tracking                                           | _(not set)_                                          |
+| `MLFLOW_TRACKING_PASSWORD`   | Optional password for authenticated MLflow tracking                                           | _(not set)_ (read from Secret when running on Kubernetes) |
+| `ADMIN_API_TOKEN`            | Shared secret required by `/admin/reload` (strongly recommended in production). Helm can create a Secret when configured. | _(not set)_                                          |
+| `ADMIN_TOKEN_HEADER`         | HTTP header used to transport the admin token                                                  | `X-Admin-Token`                                      |
+| `LOG_LEVEL`                  | Python logging level for the inference service                                                 | `INFO`                                               |
+| `LOG_FORMAT`                 | Log output format: `json` (structured) or `text` (human-readable)                             | `json`                                               |
+| `CORRELATION_ID_HEADER`      | HTTP header name for correlation ID (default: `X-Correlation-ID`)                             | `X-Correlation-ID`                                   |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`| OpenTelemetry OTLP endpoint for traces (e.g., `http://tempo:4317`)                            | _(not set)_                                          |
+| `OTEL_SERVICE_NAME`          | Service name for distributed tracing                                                           | `ml-cicd-pipeline`                                   |
+| `OTEL_RESOURCE_ATTRIBUTES`   | Additional resource attributes (format: `key1=value1,key2=value2`)                            | _(not set)_                                          |
 
-When running locally via Poetry (outside Docker), point to your MLflow server and optionally override the runtime path:
+When running locally via Poetry (outside Docker), you can rely on MLflow for runtime downloads:
 
 ```bash
+export MODEL_SOURCE=mlflow
+export MODEL_CACHE_DIR="$(pwd)/.model-cache"
 export MLFLOW_TRACKING_URI=http://localhost:5000
 export MLFLOW_MODEL_NAME=iris-random-forest
+export MLFLOW_MODEL_STAGE=Production
 export MLFLOW_EXPERIMENT_NAME=ml-cicd-pipeline
-export MODEL_PATH="$(pwd)/mlruns/models--iris-random-forest/latest/model.pkl"
+export MODEL_AUTO_REFRESH_SECONDS=300
 export LOG_LEVEL=INFO
 export LOG_FORMAT=json
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
@@ -72,14 +84,25 @@ export OTEL_SERVICE_NAME=ml-cicd-pipeline
 PowerShell equivalent:
 
 ```powershell
+$env:MODEL_SOURCE = "mlflow"
+$env:MODEL_CACHE_DIR = "$(Get-Location)\.model-cache"
 $env:MLFLOW_TRACKING_URI = "http://localhost:5000"
 $env:MLFLOW_MODEL_NAME = "iris-random-forest"
+$env:MLFLOW_MODEL_STAGE = "Production"
 $env:MLFLOW_EXPERIMENT_NAME = "ml-cicd-pipeline"
-$env:MODEL_PATH = "$(Get-Location)\mlruns\models--iris-random-forest\latest\model.pkl"
+$env:MODEL_AUTO_REFRESH_SECONDS = "300"
 $env:LOG_LEVEL = "INFO"
 $env:LOG_FORMAT = "json"
 $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
 $env:OTEL_SERVICE_NAME = "ml-cicd-pipeline"
+```
+
+If you prefer a local filesystem model without MLflow, point the service at a file and disable auto-refresh:
+
+```bash
+export MODEL_SOURCE=local
+export MODEL_PATH="$(pwd)/mlruns/models--iris-random-forest/latest/model.pkl"
+export MODEL_AUTO_REFRESH_SECONDS=0
 ```
 
 ## 4. Preparing Data & Model Artefacts
@@ -103,6 +126,7 @@ poetry run uvicorn src.app.main:app --reload --host 0.0.0.0 --port 8000
 
 Key endpoints:
 - `GET http://127.0.0.1:8000/health/` — readiness & metrics blob.
+  The response now includes an `mlflow` block showing last connectivity verification (status, server version).
 - `POST http://127.0.0.1:8000/predict/` — batch prediction (`{"features": [[...]]}`).
 - `GET http://127.0.0.1:8000/metrics/` — Prometheus exposition format.
 
@@ -110,11 +134,14 @@ Key endpoints:
 
 ```bash
 MLFLOW_TRACKING_URI=http://localhost:5000 \
-MODEL_URI=models:/iris-random-forest/Production \
+MLFLOW_MODEL_NAME=iris-random-forest \
+MLFLOW_MODEL_STAGE=Production \
+MODEL_AUTO_REFRESH_SECONDS=300 \
+ADMIN_API_TOKEN=dev-admin-token \
 docker compose up --build
 ```
 
-The compose file injects the MLflow credentials as build arguments, downloads the specified model during the image build, and exposes port `8000`.
+The compose file surfaces the MLflow configuration as environment variables, allowing the service to download the active stage at startup while exposing port `8000`. Set `ADMIN_API_TOKEN` to a strong, unique value before exposing `/admin/reload` outside your workstation.
 
 ### Kubernetes (Helm)
 
@@ -125,10 +152,15 @@ The compose file injects the MLflow credentials as build arguments, downloads th
 ```bash
 helm upgrade --install ml-model infra/helm/ml-model-chart \
   --set image.repository=<registry>/<repo> \
-  --set image.tag=<tag>
+  --set image.tag=<tag> \
+  --set env.adminTokenSecretValue=<strong-token> \
+  --set env.mlflow.trackingPasswordSecretValue=<mlflow-password>
 ```
 
 Enable the canary overlay by keeping `canary.enabled=true` (default) and supplying an alternate tag (`--set canary.image.tag=<tag>`).
+
+If you already manage secrets separately, omit `env.adminTokenSecretValue` and instead provide `env.adminTokenSecretName` (and optionally `env.adminTokenSecretKey`) pointing to a pre-created `Secret` that contains the token.
+The same pattern applies to MLflow credentials: supply `env.mlflow.trackingPasswordSecretValue` to let the chart generate a secret, or point `env.mlflow.trackingPasswordSecretName` at an existing credential store.
 
 ## 6. Quality Gates & Tooling
 
@@ -248,4 +280,4 @@ To automate production deployments when a model is promoted:
    ```
 4. Store the GitHub token as a secret in MLflow; it must have `repo` scope to trigger the workflow.
 
-This webhook triggers `deploy-canary-and-promote.yml`, which builds containers with the supplied `MODEL_URI` and runs the canary promotion flow.
+This webhook triggers `deploy-canary-and-promote.yml`, which builds containers, configures runtime MLflow parameters derived from the supplied `MODEL_URI`, and runs the canary promotion flow.

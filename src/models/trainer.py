@@ -19,8 +19,13 @@ from sklearn.datasets import load_iris
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
-from skl2onnx import convert_sklearn
-from skl2onnx.common.data_types import FloatTensorType
+
+try:
+    from skl2onnx import convert_sklearn
+    from skl2onnx.common.data_types import FloatTensorType
+    SKL2ONNX_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    SKL2ONNX_AVAILABLE = False
 
 from src.utils.drift import persist_reference_dataset
 
@@ -104,22 +109,25 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
             registered_model_name=registered_model_name
         )
         
-        # Convert to ONNX and upload to MLflow as additional artifact
-        try:
-            # Define input type for ONNX conversion (iris has 4 features)
-            initial_type = [('float_input', FloatTensorType([None, 4]))]
-            onnx_model = convert_sklearn(model, initial_types=initial_type)
-            
-            # Log ONNX model as additional artifact in the same run
-            # Use the same registered_model_name so it's part of the same model version
-            mlflow.onnx.log_model(
-                onnx_model=onnx_model,
-                artifact_path="model_onnx",
-                registered_model_name=registered_model_name
-            )
-            logger.info("Successfully converted and uploaded ONNX model to MLflow")
-        except Exception as exc:
-            logger.warning("Failed to convert model to ONNX: %s", exc, exc_info=True)
+        # Convert to ONNX and upload to MLflow as additional artifact if dependency is available
+        if SKL2ONNX_AVAILABLE:
+            try:
+                # Define input type for ONNX conversion (iris has 4 features)
+                initial_type = [('float_input', FloatTensorType([None, 4]))]
+                onnx_model = convert_sklearn(model, initial_types=initial_type)
+
+                # Log ONNX model as additional artifact in the same run
+                # Use the same registered_model_name so it's part of the same model version
+                mlflow.onnx.log_model(
+                    onnx_model=onnx_model,
+                    artifact_path="model_onnx",
+                    registered_model_name=registered_model_name
+                )
+                logger.info("Successfully converted and uploaded ONNX model to MLflow")
+            except Exception as exc:
+                logger.warning("Failed to convert model to ONNX: %s", exc, exc_info=True)
+        else:
+            logger.info("Skipping ONNX conversion because skl2onnx is not installed")
 
     # Also save locally for backward compatibility and testing
     saved_model_path: Optional[Path] = None

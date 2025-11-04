@@ -82,6 +82,24 @@ networkPolicy:
 env:
   logLevel: INFO
   logFormat: json
+  modelSource: mlflow
+  modelPath: ""  # leave blank to use runtime downloads
+  modelCacheDir: /var/cache/ml-model
+  modelAutoRefreshSeconds: 300
+  mlflow:
+    modelName: iris-random-forest
+    modelStage: Production
+    modelVersion: ""  # optional explicit version override
+    trackingUri: ""   # e.g., http://mlflow:5000
+    trackingUsername: ""
+    trackingPasswordSecretName: ""
+    trackingPasswordSecretKey: password
+    trackingPasswordSecretValue: ""
+  adminTokenHeader: X-Admin-Token
+  adminTokenSecretName: ""   # set to reference a Kubernetes Secret providing ADMIN_API_TOKEN
+  adminTokenSecretKey: token
+  adminTokenSecretValue: ""   # when set, chart will generate a secret automatically
+  adminTokenSecretAnnotations: {}
   otelExporterOtlpEndpoint: ""  # Set to e.g., http://tempo:4317 for tracing
   otelServiceName: ml-cicd-pipeline
   otelResourceAttributes: "deployment.environment=production"

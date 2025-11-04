@@ -3,14 +3,23 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      args:
-        MODEL_URI: ${MODEL_URI:-models:/iris-random-forest/Production}
-        MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://localhost:5000}
     image: ml-cicd-pipeline:local
     ports:
       - "8000:8000"
     environment:
+      - MODEL_SOURCE=mlflow
+      - MODEL_CACHE_DIR=/var/cache/ml-model
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-http://localhost:5000}
+      - MLFLOW_MODEL_NAME=${MLFLOW_MODEL_NAME:-iris-random-forest}
+      - MLFLOW_MODEL_STAGE=${MLFLOW_MODEL_STAGE:-Production}
+      - MODEL_AUTO_REFRESH_SECONDS=${MODEL_AUTO_REFRESH_SECONDS:-300}
+      - MLFLOW_TRACKING_USERNAME=${MLFLOW_TRACKING_USERNAME:-}
+      - MLFLOW_TRACKING_PASSWORD=${MLFLOW_TRACKING_PASSWORD:-}
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN:-dev-admin-token}
+      - ADMIN_TOKEN_HEADER=${ADMIN_TOKEN_HEADER:-X-Admin-Token}
       - LOG_LEVEL=INFO
+    volumes:
+      - model-cache:/var/cache/ml-model
     restart: unless-stopped
 
   drift-monitor:
@@ -28,3 +37,6 @@ services:
     volumes:
       - ./drift-data:/data
     restart: unless-stopped
+
+volumes:
+  model-cache:

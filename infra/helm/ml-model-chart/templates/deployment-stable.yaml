@@ -17,6 +17,18 @@ spec:
         app: {{ include "ml-model-chart.name" . }}
         release: stable
     spec:
+      {{- $adminSecretName := "" }}
+      {{- if .Values.env.adminTokenSecretName }}
+        {{- $adminSecretName = .Values.env.adminTokenSecretName }}
+      {{- else if .Values.env.adminTokenSecretValue }}
+        {{- $adminSecretName = printf "%s-admin-token" (include "ml-model-chart.fullname" .) }}
+      {{- end }}
+      {{- $mlflowPasswordSecretName := "" }}
+      {{- if .Values.env.mlflow.trackingPasswordSecretName }}
+        {{- $mlflowPasswordSecretName = .Values.env.mlflow.trackingPasswordSecretName }}
+      {{- else if .Values.env.mlflow.trackingPasswordSecretValue }}
+        {{- $mlflowPasswordSecretName = printf "%s-mlflow-credentials" (include "ml-model-chart.fullname" .) }}
+      {{- end }}
       containers:
         - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -30,6 +42,54 @@ spec:
               value: {{ .Values.env.logFormat | default "json" | quote }}
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: MODEL_SOURCE
+              value: {{ .Values.env.modelSource | default "mlflow" | quote }}
+            {{- if .Values.env.modelPath }}
+            - name: MODEL_PATH
+              value: {{ .Values.env.modelPath | quote }}
+            {{- end }}
+            - name: MODEL_CACHE_DIR
+              value: {{ .Values.env.modelCacheDir | default "/var/cache/ml-model" | quote }}
+            - name: MODEL_AUTO_REFRESH_SECONDS
+              value: {{ .Values.env.modelAutoRefreshSeconds | default 0 | quote }}
+            {{- with .Values.env.mlflow }}
+            {{- if .modelName }}
+            - name: MLFLOW_MODEL_NAME
+              value: {{ .modelName | quote }}
+            {{- end }}
+            {{- if .modelStage }}
+            - name: MLFLOW_MODEL_STAGE
+              value: {{ .modelStage | quote }}
+            {{- end }}
+            {{- if .modelVersion }}
+            - name: MLFLOW_MODEL_VERSION
+              value: {{ .modelVersion | quote }}
+            {{- end }}
+            {{- if .trackingUri }}
+            - name: MLFLOW_TRACKING_URI
+              value: {{ .trackingUri | quote }}
+            {{- end }}
+            {{- if .trackingUsername }}
+            - name: MLFLOW_TRACKING_USERNAME
+              value: {{ .trackingUsername | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $mlflowPasswordSecretName }}
+            - name: MLFLOW_TRACKING_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mlflowPasswordSecretName | quote }}
+                  key: {{ .Values.env.mlflow.trackingPasswordSecretKey | default "password" | quote }}
+            {{- end }}
+            - name: ADMIN_TOKEN_HEADER
+              value: {{ .Values.env.adminTokenHeader | default "X-Admin-Token" | quote }}
+            {{- if $adminSecretName }}
+            - name: ADMIN_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $adminSecretName | quote }}
+                  key: {{ .Values.env.adminTokenSecretKey | default "token" | quote }}
+            {{- end }}
             {{- if .Values.env.otelExporterOtlpEndpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.env.otelExporterOtlpEndpoint | quote }}
@@ -42,6 +102,9 @@ spec:
             - name: OTEL_RESOURCE_ATTRIBUTES
               value: {{ .Values.env.otelResourceAttributes | quote }}
             {{- end }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ .Values.env.modelCacheDir | default "/var/cache/ml-model" | quote }}
           readinessProbe:
             httpGet:
               path: /health/
@@ -52,3 +115,6 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           {{- end }}
+      volumes:
+        - name: model-cache
+          emptyDir: {}

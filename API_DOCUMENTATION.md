@@ -643,12 +643,14 @@ except requests.exceptions.HTTPError as e:
 ### Docker Deployment Example
 
 ```bash
-# Build and run
-docker build \
-  --build-arg MODEL_URI=models:/iris-random-forest/Production \
-  --build-arg MLFLOW_TRACKING_URI=http://localhost:5000 \
-  -t ml-inference .
+# Build and run (runtime downloads from MLflow)
+docker build -t ml-inference .
 docker run -p 8000:8000 \
+  -e MODEL_SOURCE=mlflow \
+  -e MLFLOW_TRACKING_URI=http://localhost:5000 \
+  -e MLFLOW_MODEL_NAME=iris-random-forest \
+  -e MLFLOW_MODEL_STAGE=Production \
+  -e MODEL_AUTO_REFRESH_SECONDS=300 \
   -e LOG_LEVEL=INFO \
   ml-inference
 
@@ -664,7 +666,10 @@ kind: ConfigMap
 metadata:
   name: ml-inference-config
 data:
-  MODEL_PATH: "/app/model/model/model.pkl"
+  MODEL_SOURCE: "mlflow"
+  MODEL_CACHE_DIR: "/var/cache/ml-model"
+  MLFLOW_MODEL_NAME: "iris-random-forest"
+  MLFLOW_MODEL_STAGE: "Production"
   LOG_LEVEL: "INFO"
 ---
 apiVersion: apps/v1
@@ -715,6 +720,18 @@ groups:
 ---
 
 ## Additional Notes
+
+### Admin Reload
+
+```bash
+# Trigger a hot reload with admin token
+curl -X POST "http://localhost:8000/admin/reload" \
+  -H "X-Admin-Token: ${ADMIN_API_TOKEN}"
+```
+
+- Returns `{"status": "reloaded", "detail": "...", "version": "...", "stage": "..."}` when a new descriptor is applied.
+- `403 Forbidden` indicates the header is missing or incorrect.
+- The `/health/` endpoint exposes the last `mlflow` connectivity check (`status`, `server_version`, `verified_at`) for operational visibility.
 
 ### Model Format
 

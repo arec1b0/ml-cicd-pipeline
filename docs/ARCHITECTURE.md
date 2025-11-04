@@ -37,19 +37,20 @@ raw data → validation → training → model registry → container image → 
    - Trains a RandomForest, evaluates accuracy, and logs metrics + model artefacts to MLflow (`mlflow.sklearn.log_model`).
    - Registers the model version under `MLFLOW_MODEL_NAME`, returning a resolvable `models:/...` URI for automation.
 4. **Model registry**: MLflow stores versions, stages, and metrics. GitHub Actions consume the emitted `MODEL_URI` (and MLflow webhooks emit `repository_dispatch` events) to trigger deployments.
-5. **Promotion**: During deploy workflows, the packaged image references the dispatched `MODEL_URI`, downloads the model during the Docker build, and is validated against live metrics before promotion.
+5. **Promotion**: Deploy workflows keep the container image model-agnostic. At runtime the `ModelManager` resolves the promoted MLflow stage/version, downloads artefacts into a writable cache, validates metrics, and hot-swaps the serving model without rebuilding the image.
 
 ## 4. Inference Service Architecture
 
 - **Entrypoint**: `src/app/main.py` constructs the FastAPI app, wires routers (`health`, `predict`, `metrics`), and registers telemetry middleware.
 - **Startup lifecycle**:
-  - Reads `MODEL_PATH` and `LOG_LEVEL` from environment (see `src/app/config.py`).
-  - Loads the model via `src/models/infer.load_model`, storing wrapper/metrics on `app.state`.
-  - Seeds the `ml_model_accuracy` Prometheus gauge from `metrics.json`.
+  - Builds a `ModelManager` from environment variables (`MODEL_SOURCE`, `MLFLOW_MODEL_NAME`/`STAGE`, `MODEL_CACHE_DIR`, etc.).
+  - Resolves the target descriptor (local path or MLflow model), downloads artefacts if necessary, loads them via `src/models/infer.load_model`, and stores wrapper/metrics on `app.state`.
+  - Seeds the `ml_model_accuracy` Prometheus gauge from `metrics.json`, records MLflow connectivity metadata (server version, last verification timestamp), and optionally schedules the auto-refresh loop (`MODEL_AUTO_REFRESH_SECONDS`).
 - **Request handling**:
-  - `/health/`: reports readiness plus the last recorded metrics blob.
+  - `/health/`: reports readiness plus the last recorded metrics blob and MLflow connectivity diagnostics.
   - `/predict/`: validates payload shape, routes to the model wrapper, and normalises predictions.
   - `/metrics/`: serves Prometheus exposition format produced by `src/utils/telemetry.metrics_response`.
+  - `/admin/reload`: secured endpoint accepting an admin token and forcing a model refresh/download for zero-downtime updates.
 - **Telemetry**:
   - Middleware counts requests (`ml_request_count`), measures latency histograms, and tracks 5xx errors.
   - Accuracy gauge enables deploy-time gating and continuous monitoring.
@@ -59,17 +60,17 @@ raw data → validation → training → model registry → container image → 
 - `ci-lint-test.yml`: multi-OS job running Ruff, MyPy, and pytest on pushes/PRs to `main`.
 - `data-validation.yml`: on-demand or data changes; executes `python -m src.data.validators.cli --sample`.
 - `model-training.yml`: trains the model against MLflow, registers a new version, and surfaces the resulting `MODEL_URI` as a workflow output.
-- `deploy-canary-and-promote.yml`: consumes a `MODEL_URI` (via MLflow webhook or manual trigger), builds/pushes an image, deploys a Kubernetes canary via Helm, runs smoke tests, evaluates `ml_model_accuracy ≥ 0.70`, and either promotes or rolls back.
+- `deploy-canary-and-promote.yml`: parses the supplied `MODEL_URI` to configure runtime environment variables (model name/stage), builds/pushes the image, deploys a Kubernetes canary via Helm, runs smoke tests, evaluates `ml_model_accuracy ≥ 0.70`, and either promotes or rolls back.
 
 All workflows rely on Poetry-managed dependencies (Python 3.11). Secrets configure container registry credentials and kubeconfig data.
 
 ## 6. Infrastructure Footprint
 
-- **Container image**: `docker/Dockerfile` installs requirements from `requirements.txt`, copies `src/`, downloads the specified MLflow model during build, and runs Uvicorn (`src.app.main:app`) on port 8000.
+- **Container image**: `docker/Dockerfile` installs requirements from `requirements.txt`, copies application code, prepares a writable cache directory, and runs Uvicorn (`src.app.main:app`) on port 8000. Models are fetched at runtime by the `ModelManager`.
 - **Helm chart** (`infra/helm/ml-model-chart`):
   - Deploys stable and optional canary deployments/services.
   - Ingress resources support weighted canary routing via Nginx annotations.
-  - Values permit tuning replica counts, image repository/tag, and canary weight.
+  - Values permit tuning replica counts, image repository/tag, canary weight, and now ship managed `Secret` objects for both `ADMIN_API_TOKEN` and MLflow credentials when the corresponding `env.*SecretValue` settings are supplied.
 - **Monitoring** (`infra/monitoring`):
   - `ml-service-monitor.yaml`: Prometheus Operator `ServiceMonitor` for scraping `/metrics`.
   - `ml-recording-rules.yaml`: Recording rules for request error rate and p95 latency.
