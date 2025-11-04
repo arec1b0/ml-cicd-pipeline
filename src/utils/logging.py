@@ -22,10 +22,21 @@ correlation_id_ctx: ContextVar[str | None] = ContextVar("correlation_id", defaul
 
 
 class CorrelationIDFilter(logging.Filter):
-    """Logging filter that adds correlation_id to log records."""
+    """A logging filter that injects the correlation ID into log records.
+
+    This filter retrieves the correlation ID from a context variable and
+    adds it to the log record, making it available for structured logging.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        """Add correlation_id from context to log record."""
+        """Adds the correlation ID to the log record.
+
+        Args:
+            record: The log record to be processed.
+
+        Returns:
+            Always returns True to allow the record to be processed.
+        """
         correlation_id = correlation_id_ctx.get()
         if correlation_id:
             record.correlation_id = correlation_id
@@ -35,10 +46,20 @@ class CorrelationIDFilter(logging.Filter):
 
 
 class CustomJsonFormatter(jsonlogger.JsonFormatter):
-    """Custom JSON formatter that includes correlation_id and standard fields."""
+    """A custom JSON log formatter.
+
+    This formatter enriches the JSON log output with additional fields
+    like `correlation_id`, `level`, `logger`, and `timestamp`.
+    """
 
     def add_fields(self, log_record: dict[str, Any], record: logging.LogRecord, message_dict: dict[str, Any]) -> None:
-        """Add custom fields to log record."""
+        """Adds custom fields to the log record.
+
+        Args:
+            log_record: The dictionary representing the log record.
+            record: The original log record.
+            message_dict: A dictionary containing the formatted log message.
+        """
         super().add_fields(log_record, record, message_dict)
         
         # Ensure correlation_id is included
@@ -52,12 +73,15 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
 
 
 def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
-    """
-    Configure structured JSON logging for the application.
-    
+    """Configures structured logging for the application.
+
+    This function sets up a handler that formats log messages as JSON
+    and includes a filter to add a correlation ID to each log record.
+    It supports both "json" and "text" log formats.
+
     Args:
-        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        log_format: Output format - "json" or "text" (default: json)
+        log_level: The desired logging level (e.g., "INFO", "DEBUG").
+        log_format: The log output format, either "json" or "text".
     """
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))

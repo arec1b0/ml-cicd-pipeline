@@ -21,18 +21,40 @@ router = APIRouter(prefix="/predict", tags=["predict"])
 
 # Input schema: list of numeric feature vectors.
 class PredictRequest(BaseModel):
+    """Request model for the /predict endpoint.
+
+    Attributes:
+        features: A list of feature vectors, where each feature vector is a list of floats.
+    """
     features: List[List[float]]
 
 class PredictResponse(BaseModel):
+    """Response model for the /predict endpoint.
+
+    Attributes:
+        predictions: A list of integer predictions.
+    """
     predictions: List[int]
 
 @router.post("/", response_model=PredictResponse)
 async def predict(request: Request, payload: PredictRequest, background_tasks: BackgroundTasks) -> PredictResponse:
-    """
-    Predict endpoint expects JSON body: {"features": [[...], [...]]}.
-    The model instance is attached to app.state.ml_wrapper during startup.
-    This handler validates input shape and returns integer-like predictions
-    as ints for compact JSON.
+    """Runs model inference on a batch of feature vectors.
+
+    This endpoint validates the input payload, checks for model readiness,
+    and uses the loaded model to generate predictions. It also logs
+    prediction metadata and emits telemetry.
+
+    Args:
+        request: The incoming FastAPI request object.
+        payload: The request body, containing the feature vectors for inference.
+        background_tasks: FastAPI's background task runner.
+
+    Raises:
+        HTTPException: If the model is not loaded (503), the input is invalid (400),
+                       or an internal error occurs during prediction (500).
+
+    Returns:
+        PredictResponse: An object containing the list of predictions.
     """
     app = request.app
     correlation_id = getattr(request.state, "correlation_id", None)

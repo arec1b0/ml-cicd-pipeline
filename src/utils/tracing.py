@@ -28,7 +28,18 @@ except ImportError:
 
 
 def get_tracer(name: str) -> Any:
-    """Get a tracer instance for creating spans."""
+    """Returns an OpenTelemetry tracer.
+
+    If OpenTelemetry is not installed, this function returns a no-op tracer
+    that provides the same interface but does not perform any tracing. This
+    allows the application to run without OpenTelemetry installed.
+
+    Args:
+        name: The name of the tracer, typically the module name.
+
+    Returns:
+        An OpenTelemetry tracer or a no-op tracer.
+    """
     if not OPENTELEMETRY_AVAILABLE:
         # Return a no-op tracer if OpenTelemetry is not available
         class NoOpSpan:
@@ -55,14 +66,16 @@ def initialize_tracing(
     otlp_endpoint: str | None = None,
     resource_attributes: dict[str, str] | None = None
 ) -> None:
-    """
-    Initialize OpenTelemetry tracing.
-    
+    """Initializes the OpenTelemetry SDK for distributed tracing.
+
+    This function sets up the tracer provider, OTLP exporter, and span
+    processor. It is typically called once at application startup.
+
     Args:
-        service_name: Name of the service for traces
-        service_version: Version of the service
-        otlp_endpoint: OTLP exporter endpoint (e.g., http://tempo:4317)
-        resource_attributes: Additional resource attributes to include
+        service_name: The name of the service.
+        service_version: The version of the service.
+        otlp_endpoint: The OTLP exporter endpoint.
+        resource_attributes: Additional resource attributes to include in traces.
     """
     if not OPENTELEMETRY_AVAILABLE:
         return
@@ -111,11 +124,13 @@ def initialize_tracing(
 
 
 def instrument_fastapi(app: Any) -> None:
-    """
-    Instrument FastAPI application with OpenTelemetry.
-    
+    """Instruments a FastAPI application with OpenTelemetry.
+
+    This function uses the `FastAPIInstrumentor` to automatically trace
+    requests to the FastAPI application.
+
     Args:
-        app: FastAPI application instance
+        app: The FastAPI application instance to instrument.
     """
     if not OPENTELEMETRY_AVAILABLE or not FastAPIInstrumentor:
         return

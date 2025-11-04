@@ -40,14 +40,31 @@ MODEL_ACCURACY = Gauge(
 )
 
 class PrometheusMiddleware(BaseHTTPMiddleware):
-    """
-    Starlette middleware that collects Prometheus metrics per request.
+    """A Starlette middleware that collects Prometheus metrics for each request.
+
+    This middleware tracks request counts, latency, and errors, and exposes
+    them as Prometheus metrics.
+
+    Args:
+        app: The Starlette application instance.
     """
 
     def __init__(self, app):
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next: Callable):
+        """Processes a request and collects metrics.
+
+        This method times the request, captures its method, path, and status code,
+        and increments the appropriate Prometheus counters and histograms.
+
+        Args:
+            request: The incoming Starlette request object.
+            call_next: The next middleware or endpoint in the chain.
+
+        Returns:
+            The response from the next middleware or endpoint.
+        """
         start = time.time()
         method = request.method
         path = request.url.path
@@ -71,8 +88,13 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
         return resp
 
 def metrics_response() -> Response:
-    """
-    Return the current metrics in Prometheus text format.
+    """Generates a Prometheus metrics response.
+
+    This function collects the latest metrics from the Prometheus registry
+    and returns them in the Prometheus text format.
+
+    Returns:
+        A Starlette Response object containing the Prometheus metrics.
     """
     payload = generate_latest(REGISTRY)
     return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
