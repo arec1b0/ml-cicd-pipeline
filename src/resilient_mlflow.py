@@ -1,0 +1,438 @@
+"""
+Resilient MLflow client wrapper with retry logic and circuit breaker patterns.
+
+This module provides a wrapper around MLflow operations to handle transient failures
+and prevent cascading failures when MLflow is unavailable.
+"""
+
+import functools
+import logging
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Any, Callable, Optional, TypeVar
+
+import mlflow
+from mlflow import MlflowClient
+from mlflow.exceptions import MlflowException
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+class CircuitState(Enum):
+    """Circuit breaker states."""
+
+    CLOSED = "closed"  # Normal operation
+    OPEN = "open"  # Failure threshold exceeded, reject requests
+    HALF_OPEN = "half_open"  # Testing if service recovered
+
+
+@dataclass
+class CircuitBreakerConfig:
+    """Configuration for circuit breaker."""
+
+    failure_threshold: int = 5  # Number of failures before opening circuit
+    success_threshold: int = 2  # Number of successes to close circuit from half-open
+    timeout: int = 60  # Seconds to wait before trying again (half-open)
+
+
+@dataclass
+class RetryConfig:
+    """Configuration for retry logic."""
+
+    max_attempts: int = 5
+    backoff_factor: float = 2.0  # Exponential backoff multiplier
+    initial_delay: float = 1.0  # Initial delay in seconds
+    max_delay: float = 30.0  # Maximum delay between retries
+    retryable_exceptions: tuple = (
+        MlflowException,
+        ConnectionError,
+        TimeoutError,
+    )
+
+
+class CircuitBreaker:
+    """
+    Circuit breaker to prevent cascading failures.
+
+    The circuit breaker has three states:
+    - CLOSED: Normal operation, requests pass through
+    - OPEN: Too many failures, requests are rejected immediately
+    - HALF_OPEN: Testing if service recovered, limited requests allowed
+    """
+
+    def __init__(self, config: CircuitBreakerConfig):
+        self.config = config
+        self.state = CircuitState.CLOSED
+        self.failure_count = 0
+        self.success_count = 0
+        self.last_failure_time: Optional[datetime] = None
+
+    def call(self, func: Callable[[], T]) -> T:
+        """
+        Execute function with circuit breaker protection.
+
+        Args:
+            func: Function to execute
+
+        Returns:
+            Function result
+
+        Raises:
+            Exception: If circuit is OPEN or function fails
+        """
+        if self.state == CircuitState.OPEN:
+            if self._should_attempt_reset():
+                self.state = CircuitState.HALF_OPEN
+                logger.info("Circuit breaker entering HALF_OPEN state")
+            else:
+                raise MlflowException(
+                    f"Circuit breaker is OPEN. MLflow is unavailable. "
+                    f"Last failure: {self.last_failure_time}"
+                )
+
+        try:
+            result = func()
+            self._on_success()
+            return result
+        except Exception as e:
+            self._on_failure()
+            raise e
+
+    def _should_attempt_reset(self) -> bool:
+        """Check if enough time has passed to attempt reset."""
+        if self.last_failure_time is None:
+            return True
+        elapsed = datetime.now() - self.last_failure_time
+        return elapsed > timedelta(seconds=self.config.timeout)
+
+    def _on_success(self):
+        """Handle successful request."""
+        if self.state == CircuitState.HALF_OPEN:
+            self.success_count += 1
+            if self.success_count >= self.config.success_threshold:
+                self.state = CircuitState.CLOSED
+                self.failure_count = 0
+                self.success_count = 0
+                logger.info("Circuit breaker CLOSED after successful recovery")
+        else:
+            self.failure_count = 0
+
+    def _on_failure(self):
+        """Handle failed request."""
+        self.failure_count += 1
+        self.last_failure_time = datetime.now()
+
+        if self.state == CircuitState.HALF_OPEN:
+            self.state = CircuitState.OPEN
+            self.success_count = 0
+            logger.warning("Circuit breaker reopened after failure in HALF_OPEN state")
+        elif self.failure_count >= self.config.failure_threshold:
+            self.state = CircuitState.OPEN
+            logger.error(
+                f"Circuit breaker OPENED after {self.failure_count} failures"
+            )
+
+    def reset(self):
+        """Manually reset circuit breaker to CLOSED state."""
+        self.state = CircuitState.CLOSED
+        self.failure_count = 0
+        self.success_count = 0
+        self.last_failure_time = None
+        logger.info("Circuit breaker manually reset to CLOSED")
+
+    def get_state(self) -> dict:
+        """Get current circuit breaker state."""
+        return {
+            "state": self.state.value,
+            "failure_count": self.failure_count,
+            "success_count": self.success_count,
+            "last_failure_time": (
+                self.last_failure_time.isoformat() if self.last_failure_time else None
+            ),
+        }
+
+
+def retry_with_backoff(
+    retry_config: RetryConfig,
+    circuit_breaker: Optional[CircuitBreaker] = None,
+):
+    """
+    Decorator to add retry logic with exponential backoff.
+
+    Args:
+        retry_config: Retry configuration
+        circuit_breaker: Optional circuit breaker for additional protection
+
+    Returns:
+        Decorated function with retry logic
+    """
+
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            attempt = 0
+            last_exception = None
+
+            while attempt < retry_config.max_attempts:
+                try:
+                    if circuit_breaker:
+                        return circuit_breaker.call(lambda: func(*args, **kwargs))
+                    else:
+                        return func(*args, **kwargs)
+
+                except retry_config.retryable_exceptions as e:
+                    attempt += 1
+                    last_exception = e
+
+                    if attempt >= retry_config.max_attempts:
+                        logger.error(
+                            f"Failed after {attempt} attempts: {func.__name__}",
+                            exc_info=True,
+                        )
+                        raise
+
+                    delay = min(
+                        retry_config.initial_delay
+                        * (retry_config.backoff_factor ** (attempt - 1)),
+                        retry_config.max_delay,
+                    )
+
+                    logger.warning(
+                        f"Attempt {attempt}/{retry_config.max_attempts} failed for "
+                        f"{func.__name__}: {e}. Retrying in {delay:.2f}s..."
+                    )
+                    time.sleep(delay)
+
+            raise last_exception
+
+        return wrapper
+
+    return decorator
+
+
+class ResilientMlflowClient:
+    """
+    Wrapper around MLflow client with retry logic and circuit breaker.
+
+    This client automatically retries transient failures and protects against
+    cascading failures when MLflow is unavailable.
+
+    Example:
+        client = ResilientMlflowClient(
+            tracking_uri="http://mlflow:5000",
+            retry_config=RetryConfig(max_attempts=5),
+            circuit_breaker_config=CircuitBreakerConfig(failure_threshold=10)
+        )
+
+        with client.start_run() as run:
+            client.log_param("param", "value")
+            client.log_metric("metric", 0.95)
+    """
+
+    def __init__(
+        self,
+        tracking_uri: Optional[str] = None,
+        retry_config: Optional[RetryConfig] = None,
+        circuit_breaker_config: Optional[CircuitBreakerConfig] = None,
+    ):
+        """
+        Initialize resilient MLflow client.
+
+        Args:
+            tracking_uri: MLflow tracking server URI
+            retry_config: Retry configuration (uses defaults if None)
+            circuit_breaker_config: Circuit breaker config (uses defaults if None)
+        """
+        self.tracking_uri = tracking_uri
+        self.retry_config = retry_config or RetryConfig()
+        self.circuit_breaker = CircuitBreaker(
+            circuit_breaker_config or CircuitBreakerConfig()
+        )
+
+        if tracking_uri:
+            mlflow.set_tracking_uri(tracking_uri)
+
+        self._client: Optional[MlflowClient] = None
+
+    @property
+    def client(self) -> MlflowClient:
+        """Get or create MLflow client."""
+        if self._client is None:
+            self._client = MlflowClient(tracking_uri=self.tracking_uri)
+        return self._client
+
+    @retry_with_backoff(RetryConfig())
+    def set_tracking_uri(self, uri: str):
+        """Set MLflow tracking URI with retry."""
+        mlflow.set_tracking_uri(uri)
+        self.tracking_uri = uri
+        self._client = None  # Reset client to use new URI
+
+    @retry_with_backoff(RetryConfig())
+    def set_experiment(self, experiment_name: str) -> str:
+        """Set MLflow experiment with retry."""
+        return mlflow.set_experiment(experiment_name)
+
+    @contextmanager
+    def start_run(self, **kwargs):
+        """
+        Start MLflow run with retry logic.
+
+        Args:
+            **kwargs: Arguments to pass to mlflow.start_run()
+
+        Yields:
+            MLflow run context
+        """
+
+        @retry_with_backoff(self.retry_config, self.circuit_breaker)
+        def _start_run():
+            return mlflow.start_run(**kwargs)
+
+        run = _start_run()
+        try:
+            yield run
+        finally:
+            try:
+                mlflow.end_run()
+            except Exception as e:
+                logger.warning(f"Error ending run: {e}")
+
+    @retry_with_backoff(RetryConfig())
+    def log_param(self, key: str, value: Any):
+        """Log parameter with retry."""
+        return mlflow.log_param(key, value)
+
+    @retry_with_backoff(RetryConfig())
+    def log_params(self, params: dict):
+        """Log multiple parameters with retry."""
+        return mlflow.log_params(params)
+
+    @retry_with_backoff(RetryConfig())
+    def log_metric(self, key: str, value: float, step: Optional[int] = None):
+        """Log metric with retry."""
+        return mlflow.log_metric(key, value, step=step)
+
+    @retry_with_backoff(RetryConfig())
+    def log_metrics(self, metrics: dict, step: Optional[int] = None):
+        """Log multiple metrics with retry."""
+        return mlflow.log_metrics(metrics, step=step)
+
+    @retry_with_backoff(RetryConfig())
+    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None):
+        """Log artifact with retry."""
+        return mlflow.log_artifact(local_path, artifact_path)
+
+    @retry_with_backoff(RetryConfig())
+    def log_model(self, model, artifact_path: str, **kwargs):
+        """Log model with retry."""
+        # Determine model flavor and use appropriate log function
+        if hasattr(mlflow, "sklearn") and "sk_model" in kwargs:
+            return mlflow.sklearn.log_model(
+                sk_model=model, artifact_path=artifact_path, **kwargs
+            )
+        elif hasattr(mlflow, "onnx") and "onnx_model" in kwargs:
+            return mlflow.onnx.log_model(
+                onnx_model=model, artifact_path=artifact_path, **kwargs
+            )
+        else:
+            # Generic model logging
+            return mlflow.log_model(model, artifact_path, **kwargs)
+
+    @retry_with_backoff(RetryConfig())
+    def get_model_version(self, name: str, version: str):
+        """Get model version with retry."""
+        return self.client.get_model_version(name, version)
+
+    @retry_with_backoff(RetryConfig())
+    def get_latest_versions(self, name: str, stages: Optional[list[str]] = None):
+        """Get latest model versions with retry."""
+        return self.client.get_latest_versions(name, stages=stages)
+
+    @retry_with_backoff(RetryConfig())
+    def download_artifacts(self, artifact_uri: str, dst_path: str):
+        """Download artifacts with retry."""
+        return mlflow.artifacts.download_artifacts(
+            artifact_uri=artifact_uri, dst_path=dst_path
+        )
+
+    @retry_with_backoff(RetryConfig())
+    def search_runs(self, experiment_ids: list[str], **kwargs):
+        """Search runs with retry."""
+        return self.client.search_runs(experiment_ids, **kwargs)
+
+    @retry_with_backoff(RetryConfig())
+    def get_run(self, run_id: str):
+        """Get run with retry."""
+        return self.client.get_run(run_id)
+
+    def get_circuit_breaker_state(self) -> dict:
+        """Get current circuit breaker state."""
+        return self.circuit_breaker.get_state()
+
+    def reset_circuit_breaker(self):
+        """Manually reset circuit breaker."""
+        self.circuit_breaker.reset()
+
+    def health_check(self) -> dict:
+        """
+        Check MLflow server health.
+
+        Returns:
+            Health check result with status and circuit breaker state
+        """
+        try:
+            # Try to get server version as a health check
+            version = self.client.get_server_version()
+            return {
+                "status": "healthy",
+                "server_version": version,
+                "circuit_breaker": self.get_circuit_breaker_state(),
+            }
+        except Exception as e:
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "circuit_breaker": self.get_circuit_breaker_state(),
+            }
+
+
+# Convenience function to create client from environment variables
+def create_resilient_client_from_env() -> ResilientMlflowClient:
+    """
+    Create resilient MLflow client from environment variables.
+
+    Environment variables:
+        MLFLOW_TRACKING_URI: MLflow tracking server URI
+        MLFLOW_RETRY_MAX_ATTEMPTS: Maximum retry attempts (default: 5)
+        MLFLOW_RETRY_BACKOFF_FACTOR: Backoff multiplier (default: 2.0)
+        MLFLOW_CIRCUIT_BREAKER_THRESHOLD: Failure threshold (default: 5)
+        MLFLOW_CIRCUIT_BREAKER_TIMEOUT: Timeout in seconds (default: 60)
+
+    Returns:
+        Configured ResilientMlflowClient
+    """
+    import os
+
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+
+    retry_config = RetryConfig(
+        max_attempts=int(os.getenv("MLFLOW_RETRY_MAX_ATTEMPTS", "5")),
+        backoff_factor=float(os.getenv("MLFLOW_RETRY_BACKOFF_FACTOR", "2.0")),
+    )
+
+    circuit_breaker_config = CircuitBreakerConfig(
+        failure_threshold=int(os.getenv("MLFLOW_CIRCUIT_BREAKER_THRESHOLD", "5")),
+        timeout=int(os.getenv("MLFLOW_CIRCUIT_BREAKER_TIMEOUT", "60")),
+    )
+
+    return ResilientMlflowClient(
+        tracking_uri=tracking_uri,
+        retry_config=retry_config,
+        circuit_breaker_config=circuit_breaker_config,
+    )
