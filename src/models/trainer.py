@@ -20,6 +20,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
+from src.resilient_mlflow import ResilientMlflowClient, RetryConfig, CircuitBreakerConfig
+
 try:
     from skl2onnx import convert_sklearn
     from skl2onnx.common.data_types import FloatTensorType
@@ -51,26 +53,43 @@ class TrainResult:
     reference_dataset_uri: Optional[str] = None
 
 
-def _configure_mlflow() -> Tuple[str, str]:
+def _configure_mlflow() -> Tuple[str, str, ResilientMlflowClient]:
     """Configures MLflow tracking and experiment settings from environment variables.
 
     This function sets the MLflow tracking URI and experiment name. It also
-    determines the name for the registered model.
+    determines the name for the registered model and creates a resilient MLflow client.
 
     Returns:
-        A tuple containing the MLflow tracking URI and the registered model name.
+        A tuple containing the MLflow tracking URI, the registered model name,
+        and a ResilientMlflowClient instance.
     """
     tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
     if not tracking_uri:
         # fall back to local file store for developer experience/tests
         tracking_uri = f"file://{(Path.cwd() / 'mlruns').resolve()}"
-    mlflow.set_tracking_uri(tracking_uri)
+
+    # Create resilient MLflow client with retry and circuit breaker
+    retry_config = RetryConfig(
+        max_attempts=int(os.environ.get("MLFLOW_RETRY_MAX_ATTEMPTS", "5")),
+        backoff_factor=float(os.environ.get("MLFLOW_RETRY_BACKOFF_FACTOR", "2.0")),
+    )
+
+    circuit_breaker_config = CircuitBreakerConfig(
+        failure_threshold=int(os.environ.get("MLFLOW_CIRCUIT_BREAKER_THRESHOLD", "5")),
+        timeout=int(os.environ.get("MLFLOW_CIRCUIT_BREAKER_TIMEOUT", "60")),
+    )
+
+    client = ResilientMlflowClient(
+        tracking_uri=tracking_uri,
+        retry_config=retry_config,
+        circuit_breaker_config=circuit_breaker_config,
+    )
 
     experiment_name = os.environ.get("MLFLOW_EXPERIMENT_NAME", "ml-cicd-pipeline")
-    mlflow.set_experiment(experiment_name)
+    client.set_experiment(experiment_name)
 
     registered_model_name = os.environ.get("MLFLOW_MODEL_NAME", "iris-random-forest")
-    return tracking_uri, registered_model_name
+    return tracking_uri, registered_model_name, client
 
 
 def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = None) -> TrainResult:
@@ -81,6 +100,9 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
     metrics to local files. It also persists a reference dataset for drift
     monitoring.
 
+    The function uses a resilient MLflow client with automatic retry logic and
+    circuit breaker patterns to handle transient failures.
+
     Args:
         output_path: An optional path to save the trained model file.
         metrics_path: An optional path to save the metrics as a JSON file.
@@ -88,7 +110,7 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
     Returns:
         A TrainResult object containing metadata about the training run.
     """
-    _, registered_model_name = _configure_mlflow()
+    _, registered_model_name, mlflow_client = _configure_mlflow()
 
     data = load_iris()
     X_train, X_val, y_train, y_val = train_test_split(
@@ -110,13 +132,15 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
     except Exception as exc:
         logger.warning("Failed to persist reference dataset: %s", exc, exc_info=True)
 
-    # Log to MLflow
-    with mlflow.start_run() as run:
-        mlflow.log_param("n_estimators", 10)
-        mlflow.log_param("test_size", 0.2)
-        mlflow.log_param("random_state", 42)
-        mlflow.log_metric("accuracy", acc)
-        
+    # Log to MLflow using resilient client
+    with mlflow_client.start_run() as run:
+        mlflow_client.log_params({
+            "n_estimators": 10,
+            "test_size": 0.2,
+            "random_state": 42,
+        })
+        mlflow_client.log_metric("accuracy", acc)
+
         # Infer model signature for better tracking
         signature = infer_signature(X_val, preds)
         model_info = mlflow.sklearn.log_model(
@@ -125,7 +149,7 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
             signature=signature,
             registered_model_name=registered_model_name
         )
-        
+
         # Convert to ONNX and upload to MLflow as additional artifact if dependency is available
         if SKL2ONNX_AVAILABLE:
             try:

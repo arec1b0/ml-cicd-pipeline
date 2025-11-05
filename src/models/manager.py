@@ -20,6 +20,7 @@ import mlflow
 from mlflow import MlflowClient
 
 from src.models.infer import load_model, ModelWrapper
+from src.resilient_mlflow import ResilientMlflowClient, RetryConfig, CircuitBreakerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ class ModelManager:
         self._mlflow_model_stage = mlflow_model_stage or "Production"
         self._mlflow_model_version = mlflow_model_version
         self._mlflow_tracking_uri = mlflow_tracking_uri
-        self._client: Optional[MlflowClient] = None
+        self._client: Optional[ResilientMlflowClient] = None
         self._lock = asyncio.Lock()
         self._current: Optional[LoadedModel] = None
         self._last_server_version: Optional[str] = None
@@ -173,6 +174,9 @@ class ModelManager:
         return None
 
     def _resolve_mlflow_descriptor(self) -> ModelDescriptor:
+        """
+        Resolve MLflow model descriptor using resilient client with retry logic.
+        """
         if not self._mlflow_model_name:
             raise RuntimeError("MLFLOW_MODEL_NAME must be configured for mlflow source")
 
@@ -180,7 +184,7 @@ class ModelManager:
 
         server_version: Optional[str] = None
         try:
-            server_version = client.get_server_version()
+            server_version = client.client.get_server_version()
             self._last_server_version = server_version
             logger.info(
                 "Verified MLflow connectivity",
@@ -291,10 +295,9 @@ class ModelManager:
 
     def _download_artifacts(self, model_uri: str, dst_path: Path) -> None:
         """
-        Blocking helper to download model artefacts from MLflow.
+        Blocking helper to download model artefacts from MLflow with retry logic.
         """
-        if self._mlflow_tracking_uri:
-            mlflow.set_tracking_uri(self._mlflow_tracking_uri)
+        client = self._get_mlflow_client()
 
         logger.info(
             "Downloading MLflow artefacts",
@@ -303,7 +306,7 @@ class ModelManager:
                 "dst_path": str(dst_path),
             },
         )
-        mlflow.artifacts.download_artifacts(artifact_uri=model_uri, dst_path=str(dst_path))
+        client.download_artifacts(artifact_uri=model_uri, dst_path=str(dst_path))
 
     def _resolve_model_file(self, root: Path) -> Path:
         """
@@ -353,7 +356,23 @@ class ModelManager:
                 return candidate
         return None
 
-    def _get_mlflow_client(self) -> MlflowClient:
+    def _get_mlflow_client(self) -> ResilientMlflowClient:
+        """Get or create resilient MLflow client with retry and circuit breaker."""
         if self._client is None:
-            self._client = MlflowClient(tracking_uri=self._mlflow_tracking_uri)
+            import os
+            retry_config = RetryConfig(
+                max_attempts=int(os.environ.get("MLFLOW_RETRY_MAX_ATTEMPTS", "5")),
+                backoff_factor=float(os.environ.get("MLFLOW_RETRY_BACKOFF_FACTOR", "2.0")),
+            )
+
+            circuit_breaker_config = CircuitBreakerConfig(
+                failure_threshold=int(os.environ.get("MLFLOW_CIRCUIT_BREAKER_THRESHOLD", "5")),
+                timeout=int(os.environ.get("MLFLOW_CIRCUIT_BREAKER_TIMEOUT", "60")),
+            )
+
+            self._client = ResilientMlflowClient(
+                tracking_uri=self._mlflow_tracking_uri,
+                retry_config=retry_config,
+                circuit_breaker_config=circuit_breaker_config,
+            )
         return self._client
