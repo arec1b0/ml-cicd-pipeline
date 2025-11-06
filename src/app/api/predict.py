@@ -8,8 +8,9 @@ Comments and docstrings are written in English per repo standard.
 from __future__ import annotations
 from typing import List
 import logging
+import os
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.utils.drift import emit_prediction_log
 from src.utils.tracing import get_tracer
@@ -19,14 +20,20 @@ tracer = get_tracer(__name__)
 
 router = APIRouter(prefix="/predict", tags=["predict"])
 
+# Batch size and feature dimension limits
+MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "1000"))
+EXPECTED_FEATURE_DIMENSION = int(os.getenv("EXPECTED_FEATURE_DIMENSION", "10"))
+
 # Input schema: list of numeric feature vectors.
 class PredictRequest(BaseModel):
     """Request model for the /predict endpoint.
 
     Attributes:
-        features: A list of feature vectors, where each feature vector is a list of floats.
+        features: A batch of feature vectors, where each feature vector is a list of floats.
+                  Batch size must not exceed MAX_BATCH_SIZE, and each feature vector must
+                  have EXPECTED_FEATURE_DIMENSION elements.
     """
-    features: List[List[float]]
+    features: List[List[float]] = Field(..., description="A batch of input features")
 
 class PredictResponse(BaseModel):
     """Response model for the /predict endpoint.
@@ -40,9 +47,9 @@ class PredictResponse(BaseModel):
 async def predict(request: Request, payload: PredictRequest, background_tasks: BackgroundTasks) -> PredictResponse:
     """Runs model inference on a batch of feature vectors.
 
-    This endpoint validates the input payload, checks for model readiness,
-    and uses the loaded model to generate predictions. It also logs
-    prediction metadata and emits telemetry.
+    This endpoint validates the input payload (batch size and feature dimensions),
+    checks for model readiness, and uses the loaded model to generate predictions.
+    It also logs prediction metadata and emits telemetry.
 
     Args:
         request: The incoming FastAPI request object.
@@ -67,7 +74,26 @@ async def predict(request: Request, payload: PredictRequest, background_tasks: B
         logger.error("Model not loaded", extra={"correlation_id": correlation_id})
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    # Validate shape: each item must be a non-empty list of floats
+    # Validate batch size
+    batch_size = len(payload.features)
+    if batch_size == 0:
+        logger.warning(
+            "Empty batch received",
+            extra={"correlation_id": correlation_id}
+        )
+        raise HTTPException(status_code=400, detail="Input features cannot be empty")
+    
+    if batch_size > MAX_BATCH_SIZE:
+        logger.warning(
+            f"Batch size {batch_size} exceeds maximum of {MAX_BATCH_SIZE}",
+            extra={"correlation_id": correlation_id, "batch_size": batch_size, "max_batch_size": MAX_BATCH_SIZE}
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch size {batch_size} exceeds maximum of {MAX_BATCH_SIZE}"
+        )
+
+    # Validate feature dimensions: each item must be a non-empty list of floats with correct dimension
     for i, row in enumerate(payload.features):
         if not isinstance(row, list) or len(row) == 0:
             logger.warning(
@@ -75,6 +101,21 @@ async def predict(request: Request, payload: PredictRequest, background_tasks: B
                 extra={"correlation_id": correlation_id, "feature_index": i}
             )
             raise HTTPException(status_code=400, detail=f"features[{i}] must be a non-empty list of numbers")
+        
+        if len(row) != EXPECTED_FEATURE_DIMENSION:
+            logger.warning(
+                f"Invalid feature dimension at index {i}",
+                extra={
+                    "correlation_id": correlation_id,
+                    "feature_index": i,
+                    "expected_dimension": EXPECTED_FEATURE_DIMENSION,
+                    "actual_dimension": len(row)
+                }
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid feature dimension at index {i}. Expected {EXPECTED_FEATURE_DIMENSION}, got {len(row)}"
+            )
 
     logger.info(
         "Processing prediction request",
