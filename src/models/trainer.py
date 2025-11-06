@@ -112,11 +112,16 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
     """
     _, registered_model_name, mlflow_client = _configure_mlflow()
 
+    # Read model parameters from environment variables with defaults
+    n_estimators = int(os.environ.get("MODEL_N_ESTIMATORS", "10"))
+    random_state = int(os.environ.get("MODEL_RANDOM_STATE", "42"))
+    test_size = float(os.environ.get("MODEL_TEST_SIZE", "0.2"))
+
     data = load_iris()
     X_train, X_val, y_train, y_val = train_test_split(
-        data.data, data.target, test_size=0.2, random_state=42
+        data.data, data.target, test_size=test_size, random_state=random_state
     )
-    model = RandomForestClassifier(n_estimators=10, random_state=42)
+    model = RandomForestClassifier(n_estimators=n_estimators, random_state=random_state)
     model.fit(X_train, y_train)
     train_preds = model.predict(X_train)
     preds = model.predict(X_val)
@@ -135,9 +140,9 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
     # Log to MLflow using resilient client
     with mlflow_client.start_run() as run:
         mlflow_client.log_params({
-            "n_estimators": 10,
-            "test_size": 0.2,
-            "random_state": 42,
+            "n_estimators": n_estimators,
+            "test_size": test_size,
+            "random_state": random_state,
         })
         mlflow_client.log_metric("accuracy", acc)
 

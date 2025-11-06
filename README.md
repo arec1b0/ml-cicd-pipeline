@@ -19,53 +19,47 @@ This repository provides an enterprise-ready CI/CD blueprint for machine learnin
 
 ### Installation
 
-<<<<<<< HEAD
-### 3. Produce Artefacts & Run Service
-1. Generate or copy datasets into `data/processed/` (satisfies validation tests).
-2. Point `MLFLOW_TRACKING_URI` (and optionally `MLFLOW_MODEL_NAME`, `MLFLOW_EXPERIMENT_NAME`) at your tracking server, then train and register a model: `poetry run python -m src.models.trainer`
-   - Add `--output <path>` if you also want a local artefact for ad-hoc testing.
-3. Start the API locally: `poetry run uvicorn src.app.main:app --reload --host 0.0.0.0 --port 8000`
-4. Validate via `GET /health/`, `POST /predict/`, and `GET /metrics/` (the health payload now includes an `mlflow` diagnostic block covering reachability and server version).
-
-Containerised option: `MLFLOW_TRACKING_URI=http://localhost:5000 MLFLOW_MODEL_NAME=iris-random-forest MLFLOW_MODEL_STAGE=Production MODEL_AUTO_REFRESH_SECONDS=300 ADMIN_API_TOKEN=dev-admin-token docker compose up --build` starts the API with runtime model downloads and exposes port `8000`—replace the token before exposing the deployment beyond local development. If your MLflow instance requires authentication, also pass `MLFLOW_TRACKING_USERNAME` and `MLFLOW_TRACKING_PASSWORD` (or configure the Helm chart secrets).
-
-## CI/CD Highlights
-
-- **Lint, type, test** (`.github/workflows/ci-lint-test.yml`): Runs Ruff, MyPy, and pytest across Linux and Windows runners.
-- **Data validation** (`data-validation.yml`): Executes validators when data assets change to catch schema drifts early.
-- **Model training** (`model-training.yml`): Automates model retraining against MLflow, registers a new version, and surfaces the resulting `MODEL_URI` for downstream automation.
-- **Canary deploy & promote** (`deploy-canary-and-promote.yml`): Reacts to MLflow `repository_dispatch` events (or manual triggers), builds/pushes images, derives runtime configuration from the supplied `MODEL_URI` (model name/stage), deploys a Helm canary, runs smoke tests, evaluates `ml_model_accuracy ≥ 0.70`, and promotes or rolls back accordingly.
-=======
 1.  **Clone the repository:**
-    ```bash
+    
     git clone https://github.com/your-username/ml-cicd-pipeline.git
     cd ml-cicd-pipeline
-    ```
-
-2.  **Install dependencies:**
+    2.  **Install dependencies:**
     -   **Windows:**
-        ```powershell
+        
         Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
         .\scripts\windows\setup.ps1
-        ```
-    -   **macOS/Linux:**
-        ```bash
+            -   **macOS/Linux:**
+     
         pip install poetry
         poetry install
-        ```
+        3.  **Produce Artefacts & Run Service:**
+    1. Generate or copy datasets into `data/processed/` (satisfies validation tests).
+    2. Point `MLFLOW_TRACKING_URI` (and optionally `MLFLOW_MODEL_NAME`, `MLFLOW_EXPERIMENT_NAME`) at your tracking server, then train and register a model: `poetry run python -m src.models.trainer`
+       - Add `--output <path>` if you also want a local artefact for ad-hoc testing.
+       - Model hyperparameters can be configured via environment variables: `MODEL_N_ESTIMATORS` (default: 10), `MODEL_RANDOM_STATE` (default: 42), `MODEL_TEST_SIZE` (default: 0.2)
+    3. Start the API locally: `poetry run uvicorn src.app.main:app --reload --host 0.0.0.0 --port 8000`
+    4. Validate via `GET /health/`, `POST /predict/`, and `GET /metrics/` (the health payload now includes an `mlflow` diagnostic block covering reachability and server version).
+
+    Containerised option: `MLFLOW_TRACKING_URI=http://localhost:5000 MLFLOW_MODEL_NAME=iris-random-forest MLFLOW_MODEL_STAGE=Production MODEL_AUTO_REFRESH_SECONDS=300 ADMIN_API_TOKEN=dev-admin-token docker compose up --build` starts the API with runtime model downloads and exposes port `8000`—replace the token before exposing the deployment beyond local development. If your MLflow instance requires authentication, also pass `MLFLOW_TRACKING_USERNAME` and `MLFLOW_TRACKING_PASSWORD` (or configure the Helm chart secrets).
 
 ### Usage
 
-1.  **Train a model:**
-    ```bash
+1.  **Train a model:**sh
     poetry run python -m src.models.trainer --output model.pkl
-    ```
-
-2.  **Run the API locally:**
-    ```bash
+        **Model Training Configuration:**
+    
+    The training script supports the following environment variables to configure model hyperparameters:
+    
+    - `MODEL_N_ESTIMATORS` (default: `10`): Number of trees in the RandomForestClassifier
+    - `MODEL_RANDOM_STATE` (default: `42`): Random seed for reproducibility in train/test split and model initialization
+    - `MODEL_TEST_SIZE` (default: `0.2`): Proportion of dataset to include in the test split (0.0 to 1.0)
+    
+    Example:
+    
+    MODEL_N_ESTIMATORS=100 MODEL_RANDOM_STATE=42 MODEL_TEST_SIZE=0.2 poetry run python -m src.models.trainer --output model.pkl
+    2.  **Run the API locally:**sh
     poetry run uvicorn src.app.main:app --reload --host 0.0.0.0 --port 8000
-    ```
-
+    
 3.  **Test the API:**
     -   **Health Check:** `GET http://localhost:8000/health/`
     -   **Prediction:** `POST http://localhost:8000/predict/` with a JSON body like `{"features": [[1, 2, 3, 4]]}`
@@ -87,11 +81,10 @@ Containerised option: `MLFLOW_TRACKING_URI=http://localhost:5000 MLFLOW_MODEL_NA
 
 ## CI/CD Highlights
 
--   **`ci-lint-test.yml`:** Lints, type-checks, and tests the codebase on both Linux and Windows runners.
--   **`data-validation.yml`:** Runs data validators to detect schema drift when data assets change.
--   **`model-training.yml`:** Automates model retraining and registration in MLflow.
--   **`deploy-canary-and-promote.yml`:** Deploys a canary release, runs smoke tests, and promotes or rolls back the release based on performance metrics.
->>>>>>> 61c46b32f946dbaf77506e97a46a5133ab2ba0e1
+- **Lint, type, test** (`.github/workflows/ci-lint-test.yml`): Runs Ruff, MyPy, and pytest across Linux and Windows runners.
+- **Data validation** (`data-validation.yml`): Executes validators when data assets change to catch schema drifts early.
+- **Model training** (`model-training.yml`): Automates model retraining against MLflow, registers a new version, and surfaces the resulting `MODEL_URI` for downstream automation.
+- **Canary deploy & promote** (`deploy-canary-and-promote.yml`): Reacts to MLflow `repository_dispatch` events (or manual triggers), builds/pushes images, derives runtime configuration from the supplied `MODEL_URI` (model name/stage), deploys a Helm canary, runs smoke tests, evaluates `ml_model_accuracy ≥ 0.70`, and promotes or rolls back accordingly.
 
 ## Drift Monitoring
 
