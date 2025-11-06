@@ -103,6 +103,11 @@ def create_app() -> FastAPI:
     )
 
     def _clear_state() -> None:
+        """Clears the application's model-related state.
+
+        This function resets the model wrapper, metrics, metadata, and readiness
+        status. It is used during startup and shutdown to ensure a clean state.
+        """
         app.state.ml_wrapper = None
         app.state.ml_metrics = None
         app.state.model_metadata = None
@@ -111,6 +116,15 @@ def create_app() -> FastAPI:
         app.state.mlflow_connectivity = {"status": "unknown"}
 
     def _apply_model_state(state: LoadedModel) -> None:
+        """Applies the loaded model state to the application.
+
+        This function updates the application state with the new model wrapper,
+        metrics, and metadata. It also sets the readiness flag and updates
+        Prometheus metrics.
+
+        Args:
+            state: The loaded model state to apply.
+        """
         metadata: dict[str, object] = {
             "source": state.descriptor.source,
             "model_uri": state.descriptor.model_uri,
@@ -153,6 +167,19 @@ def create_app() -> FastAPI:
         )
 
     async def reload_and_apply(*, force: bool) -> Optional[LoadedModel]:
+        """Reloads the model and applies the new state to the application.
+
+        This function reloads the model from its source, and if a new model is
+        loaded, it applies the new state to the application. It also handles
+        errors during the reload process.
+
+        Args:
+            force: Whether to force a reload even if the model descriptor
+                   has not changed.
+
+        Returns:
+            The new loaded model state, or None if the model was not reloaded.
+        """
         log = logging.getLogger(__name__)
         try:
             state = await manager.reload(force=force)
@@ -175,6 +202,15 @@ def create_app() -> FastAPI:
         return state
 
     async def _auto_refresh_loop(interval: int) -> None:
+        """Periodically refreshes the model in the background.
+
+        This function runs in a background task and periodically checks for a
+        new version of the model. If a new version is found, it is loaded and
+        applied to the application state.
+
+        Args:
+            interval: The interval in seconds between refresh attempts.
+        """
         log = logging.getLogger(__name__)
         log.info("Starting model auto-refresh loop", extra={"interval_seconds": interval})
         try:
@@ -208,6 +244,12 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _startup():
+        """Handles the application startup event.
+
+        This function is called when the application starts. It clears any
+        existing model state, performs an initial model load, and starts the
+        background model refresh loop if configured.
+        """
         _clear_state()
         log = logging.getLogger(__name__)
         try:
@@ -232,6 +274,11 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     async def _shutdown():
+        """Handles the application shutdown event.
+
+        This function is called when the application shuts down. It cancels the
+        background model refresh task and clears the model state.
+        """
         refresh_task = getattr(app.state, "model_refresh_task", None)
         if refresh_task:
             refresh_task.cancel()

@@ -13,11 +13,13 @@ from . import validate_csv_file, validate_dataframe, load_sample_dataframe
 
 
 def validate_sample() -> int:
-    """
-    Validate the sample iris dataset.
+    """Validates the built-in sample iris dataset.
+
+    This function loads a sample DataFrame, validates its schema and content,
+    and prints the result to the console.
 
     Returns:
-        0 if validation passes, 1 otherwise
+        An exit code, 0 for success and 1 for failure.
     """
     print("Validating sample dataset...")
     df = load_sample_dataframe()

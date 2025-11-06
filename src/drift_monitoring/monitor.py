@@ -30,6 +30,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DriftMetrics:
+    """Represents the results of a single drift evaluation.
+
+    Attributes:
+        data_drift_detected: A boolean flag indicating if data drift was detected.
+        data_drift_share: The proportion of features that have drifted.
+        prediction_drift_detected: A boolean flag indicating if prediction drift was detected.
+        prediction_drift_score: The drift score for the prediction column.
+        prediction_psi: The Population Stability Index for the prediction column.
+        feature_metrics: A list of metrics for each feature, including drift status and score.
+        current_rows: The number of rows in the current dataset used for the evaluation.
+        evaluated_at: The timestamp of the evaluation.
+    """
     data_drift_detected: bool
     data_drift_share: float
     prediction_drift_detected: bool
@@ -41,12 +53,29 @@ class DriftMetrics:
 
 
 class DriftMonitor:
-    """
-    Encapsulates reference data loading, current data retrieval, Evidently execution,
-    and Prometheus metric updates.
-    """
+    """Orchestrates the drift monitoring process.
 
+    This class is responsible for loading the reference and current datasets,
+    running the Evidently drift analysis, and exposing the results as
+    Prometheus metrics. It can be run as a background service to periodically
+    evaluate drift.
+
+    Attributes:
+        settings: The configuration for the drift monitor.
+        registry: The Prometheus collector registry.
+        reference_df: The reference dataset.
+        column_mapping: The column mapping for the Evidently report.
+        feature_columns: A list of the feature column names.
+        prediction_column: The name of the prediction column.
+        target_column: The name of the target column.
+    """
     def __init__(self, settings: DriftSettings, registry: CollectorRegistry):
+        """Initializes the DriftMonitor.
+
+        Args:
+            settings: The configuration for the drift monitor.
+            registry: The Prometheus collector registry.
+        """
         self.settings = settings
         self.registry = registry
         self.reference_df: pd.DataFrame | None = None
@@ -112,8 +141,16 @@ class DriftMonitor:
         )
 
     async def initialize(self) -> None:
-        """
-        Load the reference dataset and compute derived configuration.
+        """Loads the reference dataset and prepares the monitor for evaluation.
+
+        This method loads the reference dataset from the configured URI,
+        prepares the dataframe, and sets up the column mapping for the
+        Evidently report. It should be called before starting the background
+        evaluation loop.
+
+        Raises:
+            ValueError: If the reference dataset is empty or does not contain
+                        any feature columns.
         """
         logger.info("Loading reference dataset from %s", self.settings.reference_dataset_uri)
         df = load_dataset_from_uri(self.settings.reference_dataset_uri)
@@ -148,8 +185,10 @@ class DriftMonitor:
         )
 
     async def run(self) -> None:
-        """
-        Periodically evaluate drift until shutdown is requested.
+        """Runs the drift evaluation loop.
+
+        This method periodically calls `evaluate_once` to perform the drift
+        analysis. It runs until the `shutdown` method is called.
         """
         self._shutdown_event.clear()
         while not self._shutdown_event.is_set():
@@ -166,8 +205,13 @@ class DriftMonitor:
                 continue
 
     async def evaluate_once(self) -> None:
-        """
-        Execute a single Evidently run and update metrics.
+        """Performs a single drift evaluation.
+
+        This method loads the current dataset, runs the Evidently report,
+        extracts the metrics, and updates the Prometheus gauges.
+
+        Raises:
+            RuntimeError: If the monitor has not been initialized.
         """
         if self.reference_df is None or self.column_mapping is None:
             raise RuntimeError("DriftMonitor must be initialized before evaluating.")
@@ -216,11 +260,34 @@ class DriftMonitor:
             self._task = asyncio.create_task(self.run())
 
     def _prepare_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepares a dataframe for drift analysis.
+
+        This method creates a copy of the dataframe and strips any leading or
+        trailing whitespace from the column names.
+
+        Args:
+            df: The dataframe to prepare.
+
+        Returns:
+            The prepared dataframe.
+        """
         df = df.copy()
         df.columns = [col.strip() for col in df.columns]
         return df
 
     def _ensure_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Ensures that the dataframe has the required columns.
+
+        This method adds any missing feature, prediction, or target columns to
+        the dataframe and fills them with `pd.NA`. It also ensures that the
+        columns are in the correct order.
+
+        Args:
+            df: The dataframe to process.
+
+        Returns:
+            The dataframe with the required columns.
+        """
         df = df.copy()
         for col in self.feature_columns:
             if col not in df.columns:
@@ -238,6 +305,17 @@ class DriftMonitor:
         return df[ordered_cols]
 
     def _compute_prediction_psi(self, current_df: pd.DataFrame) -> Optional[float]:
+        """Computes the Population Stability Index (PSI) for the prediction column.
+
+        This method calculates the PSI for the prediction column by comparing
+        the distribution of predictions in the reference and current datasets.
+
+        Args:
+            current_df: The current dataset.
+
+        Returns:
+            The calculated PSI value, or None if the PSI could not be computed.
+        """
         if self.prediction_column is None or self.reference_df is None:
             return None
 
@@ -258,6 +336,15 @@ class DriftMonitor:
         return psi
 
     def _load_current_dataframe(self) -> Optional[pd.DataFrame]:
+        """Loads the current dataset from the configured source.
+
+        This method loads the current dataset from either a file URI or from
+        Loki, depending on the configuration.
+
+        Returns:
+            The current dataset as a pandas DataFrame, or None if no data
+            could be loaded.
+        """
         if self.settings.current_dataset_uri:
             return self._load_from_uri(self.settings.current_dataset_uri)
         if self.settings.loki_base_url:
@@ -266,6 +353,17 @@ class DriftMonitor:
         return None
 
     def _load_from_uri(self, uri: str) -> Optional[pd.DataFrame]:
+        """Loads a dataset from a URI.
+
+        This method can load datasets from CSV, JSON, or JSONL files.
+
+        Args:
+            uri: The URI of the dataset to load.
+
+        Returns:
+            The loaded dataset as a pandas DataFrame, or None if the dataset
+            could not be loaded.
+        """
         if uri.endswith(".json") or uri.endswith(".jsonl"):
             events = self._read_json_events(uri)
             return self._events_to_dataframe(events)
@@ -273,6 +371,14 @@ class DriftMonitor:
         return df
 
     def _read_json_events(self, uri: str) -> list[dict[str, Any]]:
+        """Reads a JSON or JSONL file and returns a list of events.
+
+        Args:
+            uri: The URI of the file to read.
+
+        Returns:
+            A list of dictionaries, where each dictionary represents a JSON object.
+        """
         resolved_uri = uri
         if uri.startswith("file://"):
             resolved_uri = uri[len("file://") :]
@@ -291,6 +397,14 @@ class DriftMonitor:
         return events
 
     def _collect_from_loki(self) -> list[dict[str, Any]]:
+        """Collects log events from Loki.
+
+        This method queries Loki for log events that match the configured
+        query and time range.
+
+        Returns:
+            A list of dictionaries, where each dictionary represents a log event.
+        """
         if not self.settings.loki_base_url or not self.settings.loki_query:
             return []
         end = datetime.now(timezone.utc)
@@ -326,6 +440,17 @@ class DriftMonitor:
         return events
 
     def _events_to_dataframe(self, events: Iterable[dict[str, Any]]) -> pd.DataFrame:
+        """Converts a list of log events to a pandas DataFrame.
+
+        This method parses a list of log events and converts them into a
+        pandas DataFrame that can be used for drift analysis.
+
+        Args:
+            events: A list of dictionaries, where each dictionary represents a log event.
+
+        Returns:
+            A pandas DataFrame.
+        """
         rows: list[dict[str, Any]] = []
         for event in events:
             features_batch = event.get("features") or []
@@ -361,6 +486,19 @@ class DriftMonitor:
         current_rows: int,
         prediction_psi: Optional[float],
     ) -> DriftMetrics:
+        """Extracts drift metrics from an Evidently report.
+
+        This method parses the JSON output of an Evidently report and extracts
+        the key drift metrics.
+
+        Args:
+            report_dict: The Evidently report as a dictionary.
+            current_rows: The number of rows in the current dataset.
+            prediction_psi: The Population Stability Index for the prediction column.
+
+        Returns:
+            A DriftMetrics object.
+        """
         data_drift_detected = False
         data_drift_share = 0.0
         prediction_drift_detected = False
@@ -395,6 +533,11 @@ class DriftMonitor:
         )
 
     def _update_prometheus(self, metrics: DriftMetrics) -> None:
+        """Updates the Prometheus gauges with the latest drift metrics.
+
+        Args:
+            metrics: The drift metrics to update.
+        """
         self.data_drift_status.set(1 if metrics.data_drift_detected else 0)
         self.data_drift_share.set(metrics.data_drift_share)
         self.prediction_drift_status.set(1 if metrics.prediction_drift_detected else 0)
