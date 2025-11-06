@@ -2,12 +2,62 @@
 
 This repository provides an enterprise-ready CI/CD blueprint for machine learning services. It demonstrates how to move a model from experimentation to production with reproducible assets, automated quality gates, and observable runtime behavior across both Windows and Linux environments.
 
+## Purpose
+
+The main goal of this project is to provide a complete, end-to-end example of a production-ready machine learning service. This includes not only the model training and inference code, but also the surrounding infrastructure, such as:
+
+*   **CI/CD pipelines:** Automated workflows for testing, building, and deploying the service.
+*   **Infrastructure as Code (IaC):**  Terraform and Helm charts for provisioning and managing the required infrastructure.
+*   **Monitoring and alerting:**  Prometheus and Grafana for monitoring the service's health and performance, and for sending alerts when issues are detected.
+*   **Drift detection:**  A dedicated service for detecting and reporting data and model drift.
+
+By providing a complete and well-documented example, this project aims to help developers and organizations build and deploy their own machine learning services more effectively.
+
 ## Features
 
 - **End-to-End Workflow:** Covers data validation, training, packaging, deployment, and post-deployment gating in a single, cohesive project.
 - **Platform Agnostic:** Offers first-class support for Windows (via PowerShell) and Linux/macOS, plus containerized delivery.
 - **Production Guardrails:** Implements GitHub Actions pipelines to enforce linting, type checking, testing, data validation, model metric thresholds, and canary promotion rules.
 - **Operational Clarity:** Includes runbooks, policy documents, and monitoring manifests that reflect the real-world challenges of ML operations.
+
+## Architecture
+
+The following diagram illustrates the high-level architecture of the MLOps pipeline:
+
+```mermaid
+graph TD
+    subgraph "CI/CD (GitHub Actions)"
+        A[Code Push] --> B{Lint, Type Check, Test};
+        B --> C{Data Validation};
+        C --> D{Model Training};
+        D -- Registers --> E[MLflow Model Registry];
+        E -- Triggers --> F{Canary Deploy};
+        F -- Smoke Tests --> G{Promote to Production};
+    end
+
+    subgraph "Local Development"
+        H[Developer] -- Trains --> D;
+        H -- Runs --> I[FastAPI Inference Service];
+    end
+
+    subgraph "Production Environment"
+        J[User Request] --> I;
+        I -- Predicts --> K[Prediction Response];
+        I -- Emits Logs --> L[Loki];
+        M[Drift Monitoring Service] -- Reads --> E;
+        M -- Reads Logs --> L;
+        M -- Compares Data --> N[Evidently Report];
+        N -- Generates Metrics --> O[Prometheus];
+        I -- Emits Metrics --> O;
+        O -- Alerts --> P[Alertmanager];
+    end
+
+    style I fill:#f9f,stroke:#333,stroke-width:2px
+    style M fill:#f9f,stroke:#333,stroke-width:2px
+    style L fill:#ccf,stroke:#333,stroke-width:2px
+    style E fill:#ccf,stroke:#333,stroke-width:2px
+    style O fill:#ccf,stroke:#333,stroke-width:2px
+```
 
 ## Quick Start
 
@@ -64,6 +114,28 @@ This repository provides an enterprise-ready CI/CD blueprint for machine learnin
     -   **Health Check:** `GET http://localhost:8000/health/`
     -   **Prediction:** `POST http://localhost:8000/predict/` with a JSON body like `{"features": [[1, 2, 3, 4]]}`
     -   **Metrics:** `GET http://localhost:8000/metrics/`
+
+## Configuration
+
+The service can be configured using environment variables. The most important variables are:
+
+*   `MODEL_SOURCE`: The source of the model. Can be `local` or `mlflow`. Defaults to `mlflow`.
+*   `MODEL_PATH`: The local path to the model file. Only used if `MODEL_SOURCE` is `local`.
+*   `MLFLOW_TRACKING_URI`: The URI of the MLflow tracking server.
+*   `MLFLOW_MODEL_NAME`: The name of the model in the MLflow model registry.
+*   `MLFLOW_MODEL_STAGE`: The stage of the model in the MLflow model registry. Defaults to `Production`.
+*   `LOG_LEVEL`: The logging level. Defaults to `INFO`.
+*   `LOG_FORMAT`: The log format. Can be `json` or `text`. Defaults to `json`.
+
+## Testing
+
+To run the tests, use the following command:
+
+```sh
+poetry run pytest
+```
+
+The tests are located in the `tests/` directory and are written using the `pytest` framework. The tests cover both the model training and inference code, as well as the API endpoints.
 
 ## Project Structure
 

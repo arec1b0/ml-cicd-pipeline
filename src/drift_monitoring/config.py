@@ -21,10 +21,23 @@ def _get_env_int(name: str, default: int | None = None) -> Optional[int]:
 
 @dataclass
 class DriftSettings:
-    """
-    Strongly typed configuration for the drift monitoring service.
-    """
+    """Strongly typed configuration for the drift monitoring service.
 
+    This class encapsulates all the settings required to configure the drift
+    monitoring service, including data source URIs, Loki connection details,
+    and evaluation parameters.
+
+    Attributes:
+        reference_dataset_uri: The URI of the reference dataset (e.g., training data).
+        current_dataset_uri: The URI of the current dataset (e.g., production data).
+        loki_base_url: The base URL of the Loki service for querying logs.
+        loki_query: The LogQL query to execute against Loki to fetch production data.
+        loki_range_minutes: The time range in minutes for the Loki query.
+        evaluation_interval_seconds: The interval in seconds between drift evaluations.
+        min_rows: The minimum number of rows required in the current dataset to run an evaluation.
+        max_rows: The maximum number of rows to sample from the current dataset.
+        log_level: The logging level for the service.
+    """
     reference_dataset_uri: str
     current_dataset_uri: Optional[str]
     loki_base_url: Optional[str]
@@ -37,6 +50,17 @@ class DriftSettings:
 
     @classmethod
     def from_env(cls) -> "DriftSettings":
+        """Creates a DriftSettings instance from environment variables.
+
+        This classmethod reads all the required and optional configuration
+        values from environment variables and constructs a DriftSettings object.
+
+        Returns:
+            A configured DriftSettings instance.
+
+        Raises:
+            ValueError: If a required environment variable is not set.
+        """
         reference_dataset_uri = os.getenv("REFERENCE_DATASET_URI")
         if not reference_dataset_uri:
             raise ValueError("REFERENCE_DATASET_URI env variable is required for drift monitoring service.")
@@ -54,8 +78,14 @@ class DriftSettings:
         )
 
     def validate(self) -> None:
-        """
-        Ensure the settings contain a current data source definition.
+        """Validates the configuration settings.
+
+        This method checks that the settings are valid and consistent. For
+        example, it ensures that at least one source for the current dataset
+        is configured.
+
+        Raises:
+            ValueError: If the configuration is invalid.
         """
         if not self.current_dataset_uri and not self.loki_base_url:
             raise ValueError(

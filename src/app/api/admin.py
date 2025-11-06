@@ -13,6 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 class ReloadResponse(BaseModel):
+    """Response model for the /admin/reload endpoint.
+
+    Attributes:
+        status: The status of the reload operation (e.g., "reloaded", "noop").
+        detail: A message describing the outcome of the reload.
+        version: The version of the newly loaded model, if applicable.
+        stage: The stage of the newly loaded model, if applicable.
+    """
     status: str
     detail: str
     version: str | None = None
@@ -21,8 +29,21 @@ class ReloadResponse(BaseModel):
 
 @router.post("/reload", response_model=ReloadResponse, status_code=status.HTTP_200_OK)
 async def reload_model(request: Request) -> ReloadResponse:
-    """
-    Force reload of the active model via ModelManager.
+    """Triggers a forced reload of the machine learning model.
+
+    This endpoint provides an administrative function to force the service to
+    reload the model from its source. It is protected by an admin token.
+
+    Args:
+        request: The incoming FastAPI request object.
+
+    Raises:
+        HTTPException: If the admin token is missing or invalid (403),
+                       if the model manager is not available (503), or if an
+                       error occurs during the reload (500).
+
+    Returns:
+        A ReloadResponse object indicating the outcome of the operation.
     """
     app = request.app
     header_name = getattr(app.state, "admin_token_header", "X-Admin-Token")

@@ -27,10 +27,21 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ModelDescriptor:
-    """
-    Normalised representation of a model target.
-    """
+    """Represents a unique, addressable model version.
 
+    This class provides a normalized representation of a model, whether it is
+    sourced from a local file path or from an MLflow model registry. It is
+    used to track the currently loaded model and to resolve new model versions.
+
+    Attributes:
+        source: The source of the model (e.g., "local", "mlflow").
+        model_uri: The URI of the model.
+        version: The model version, if applicable.
+        stage: The model stage, if applicable.
+        run_id: The ID of the MLflow run that produced the model, if applicable.
+        local_path: The local file path to the model, if applicable.
+        server_version: The version of the MLflow server, if applicable.
+    """
     source: str
     model_uri: str
     version: Optional[str] = None
@@ -41,8 +52,13 @@ class ModelDescriptor:
 
     @property
     def cache_key(self) -> str:
-        """
-        Stable cache key for storing downloaded artefacts.
+        """Generates a stable cache key for the model descriptor.
+
+        This key is used to create a directory in the cache for storing the
+        downloaded model artifacts.
+
+        Returns:
+            A string representing the cache key.
         """
         if self.source == "local":
             return "local"
@@ -55,10 +71,19 @@ class ModelDescriptor:
 
 @dataclass
 class LoadedModel:
-    """
-    Container for a loaded model instance and associated metadata.
-    """
+    """Represents a model that has been loaded into memory.
 
+    This class encapsulates a loaded model instance, its associated metadata,
+    and the path to the model artifacts.
+
+    Attributes:
+        wrapper: The `ModelWrapper` instance that provides a unified `predict` interface.
+        model_file: The path to the model file (e.g., `model.pkl` or `model.onnx`).
+        metrics: A dictionary of metrics associated with the model.
+        accuracy: The accuracy of the model, if available.
+        descriptor: The `ModelDescriptor` for the loaded model.
+        artifact_path: The path to the directory containing the model artifacts.
+    """
     wrapper: ModelWrapper
     model_file: Path
     metrics: Optional[Dict[str, Any]]
@@ -68,10 +93,18 @@ class LoadedModel:
 
 
 class ModelManager:
-    """
-    Handles runtime model discovery, download, caching, and swaps.
-    """
+    """Manages the lifecycle of machine learning models.
 
+    This class is responsible for discovering, downloading, caching, and loading
+    models at runtime. It supports loading models from local file paths and from
+    an MLflow model registry. It also provides a mechanism for hot-swapping
+    models without service restarts.
+
+    Attributes:
+        current: The currently loaded model, or None if no model is loaded.
+        supports_auto_refresh: A boolean indicating if the model manager supports
+                               automatic polling for model updates.
+    """
     def __init__(
         self,
         *,
@@ -83,6 +116,17 @@ class ModelManager:
         mlflow_model_version: Optional[str],
         mlflow_tracking_uri: Optional[str],
     ) -> None:
+        """Initializes the ModelManager.
+
+        Args:
+            source: The source of the model (e.g., "local", "mlflow").
+            model_path: The local file path to the model.
+            cache_dir: The directory to cache downloaded models.
+            mlflow_model_name: The name of the model in MLflow.
+            mlflow_model_stage: The stage of the model in MLflow.
+            mlflow_model_version: The version of the model in MLflow.
+            mlflow_tracking_uri: The URI of the MLflow tracking server.
+        """
         self._source = (source or "mlflow").lower()
         self._model_path = model_path
         self._cache_dir = cache_dir
@@ -118,17 +162,31 @@ class ModelManager:
         )
 
     async def initialize(self) -> Optional[LoadedModel]:
-        """
-        Ensure an initial model is loaded if none present.
+        """Initializes the model manager and loads the initial model.
+
+        This method should be called once at application startup to ensure that
+        a model is loaded and ready to serve predictions.
+
+        Returns:
+            The loaded model, or None if no model could be loaded.
         """
         if self._current is not None:
             return self._current
         return await self.reload(force=False)
 
     async def reload(self, *, force: bool) -> Optional[LoadedModel]:
-        """
-        Reload the model. When force=True the artefacts are refreshed even if
-        the metadata matches the currently loaded version.
+        """Reloads the model.
+
+        This method resolves the latest model descriptor, and if it is
+        different from the currently loaded model, it downloads and loads the
+        new model.
+
+        Args:
+            force: If True, the model artifacts will be re-downloaded even if
+                   the model descriptor has not changed.
+
+        Returns:
+            The newly loaded model, or None if the model was not reloaded.
         """
         async with self._lock:
             descriptor = await self._resolve_descriptor()
@@ -145,8 +203,14 @@ class ModelManager:
             return state
 
     async def refresh_if_needed(self) -> Optional[LoadedModel]:
-        """
-        Poll for a new model and return it if a different version is available.
+        """Refreshes the model if a new version is available.
+
+        This method is designed to be called periodically by a background task.
+        It polls for the latest model descriptor, and if it is different from
+        the currently loaded model, it downloads and loads the new model.
+
+        Returns:
+            The newly loaded model, or None if no new model was loaded.
         """
         if self._source != "mlflow":
             return None
@@ -162,6 +226,17 @@ class ModelManager:
             return state
 
     async def _resolve_descriptor(self) -> Optional[ModelDescriptor]:
+        """Resolves the current model descriptor.
+
+        This method resolves the current model descriptor based on the
+        configured model source. For local models, it returns a descriptor
+        for the configured file path. For MLflow models, it queries the
+        MLflow server for the latest version.
+
+        Returns:
+            The resolved model descriptor, or None if no descriptor could be
+            resolved.
+        """
         if self._source == "local":
             return ModelDescriptor(
                 source="local",
@@ -174,8 +249,19 @@ class ModelManager:
         return None
 
     def _resolve_mlflow_descriptor(self) -> ModelDescriptor:
-        """
-        Resolve MLflow model descriptor using resilient client with retry logic.
+        """Resolves the latest MLflow model descriptor.
+
+        This method queries the MLflow server for the latest version of the
+        configured model and returns a `ModelDescriptor` for it. It uses a
+        resilient MLflow client with retry and circuit breaker logic.
+
+        Returns:
+            The resolved MLflow model descriptor.
+
+        Raises:
+            RuntimeError: If the MLflow model name is not configured, or if
+                          no model versions are found for the configured name
+                          and stage.
         """
         if not self._mlflow_model_name:
             raise RuntimeError("MLFLOW_MODEL_NAME must be configured for mlflow source")
@@ -230,6 +316,22 @@ class ModelManager:
         )
 
     async def _load_descriptor(self, descriptor: ModelDescriptor, *, force: bool) -> LoadedModel:
+        """Loads a model from a descriptor.
+
+        This method loads a model from the specified descriptor. It delegates
+        to the appropriate private method based on the descriptor's source.
+
+        Args:
+            descriptor: The descriptor of the model to load.
+            force: If True, the model artifacts will be re-downloaded even if
+                   they are already present in the cache.
+
+        Returns:
+            The loaded model.
+
+        Raises:
+            RuntimeError: If the descriptor source is unsupported.
+        """
         if descriptor.source == "local":
             return await self._load_local(descriptor)
         if descriptor.source == "mlflow":
@@ -237,6 +339,17 @@ class ModelManager:
         raise RuntimeError(f"Unsupported descriptor source: {descriptor.source}")
 
     async def _load_local(self, descriptor: ModelDescriptor) -> LoadedModel:
+        """Loads a model from a local file path.
+
+        Args:
+            descriptor: The descriptor of the model to load.
+
+        Returns:
+            The loaded model.
+
+        Raises:
+            FileNotFoundError: If the model path does not exist.
+        """
         path = descriptor.local_path
         if path is None or not path.exists():
             raise FileNotFoundError(f"Local model path not found: {path}")
@@ -261,6 +374,19 @@ class ModelManager:
         )
 
     async def _load_mlflow(self, descriptor: ModelDescriptor, *, force: bool) -> LoadedModel:
+        """Loads a model from MLflow.
+
+        This method downloads the model artifacts from MLflow, caches them
+        locally, and then loads the model into memory.
+
+        Args:
+            descriptor: The descriptor of the model to load.
+            force: If True, the model artifacts will be re-downloaded even if
+                   they are already present in the cache.
+
+        Returns:
+            The loaded model.
+        """
         target_dir = self._cache_dir / descriptor.cache_key
 
         if target_dir.exists() and force:
@@ -309,9 +435,19 @@ class ModelManager:
         client.download_artifacts(artifact_uri=model_uri, dst_path=str(dst_path))
 
     def _resolve_model_file(self, root: Path) -> Path:
-        """
-        Attempt to locate a usable model artefact inside the download directory.
-        Preference order: ONNX -> sklearn pickle.
+        """Locates the model file within a directory of model artifacts.
+
+        This method searches for a model file in the specified directory. It
+        prioritizes ONNX models over scikit-learn models.
+
+        Args:
+            root: The root directory of the model artifacts.
+
+        Returns:
+            The path to the model file.
+
+        Raises:
+            FileNotFoundError: If no model file is found.
         """
         for candidate in root.rglob("model.onnx"):
             if candidate.is_file():
@@ -344,6 +480,17 @@ class ModelManager:
         return metrics, accuracy
 
     def _find_metrics_file(self, root: Path) -> Optional[Path]:
+        """Locates the metrics file within a directory of model artifacts.
+
+        This method searches for a `metrics.json` file in the specified
+        directory and its parent.
+
+        Args:
+            root: The root directory of the model artifacts.
+
+        Returns:
+            The path to the metrics file, or None if no metrics file is found.
+        """
         candidates = [
             root / "metrics.json",
             root.parent / "metrics.json",

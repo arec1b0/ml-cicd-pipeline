@@ -33,21 +33,36 @@ class CircuitState(Enum):
 
 @dataclass
 class CircuitBreakerConfig:
-    """Configuration for circuit breaker."""
+    """Configuration for the CircuitBreaker.
 
-    failure_threshold: int = 5  # Number of failures before opening circuit
-    success_threshold: int = 2  # Number of successes to close circuit from half-open
-    timeout: int = 60  # Seconds to wait before trying again (half-open)
+    Attributes:
+        failure_threshold: The number of consecutive failures that must occur
+                           before the circuit opens.
+        success_threshold: The number of consecutive successes that must occur
+                           in the half-open state before the circuit closes.
+        timeout: The number of seconds to wait in the open state before
+                 transitioning to the half-open state.
+    """
+    failure_threshold: int = 5
+    success_threshold: int = 2
+    timeout: int = 60
 
 
 @dataclass
 class RetryConfig:
-    """Configuration for retry logic."""
+    """Configuration for the retry mechanism.
 
+    Attributes:
+        max_attempts: The maximum number of times to retry a failed operation.
+        backoff_factor: The multiplier for the exponential backoff between retries.
+        initial_delay: The initial delay in seconds before the first retry.
+        max_delay: The maximum delay in seconds between retries.
+        retryable_exceptions: A tuple of exception classes that should be retried.
+    """
     max_attempts: int = 5
-    backoff_factor: float = 2.0  # Exponential backoff multiplier
-    initial_delay: float = 1.0  # Initial delay in seconds
-    max_delay: float = 30.0  # Maximum delay between retries
+    backoff_factor: float = 2.0
+    initial_delay: float = 1.0
+    max_delay: float = 30.0
     retryable_exceptions: tuple = (
         MlflowException,
         ConnectionError,
@@ -66,6 +81,11 @@ class CircuitBreaker:
     """
 
     def __init__(self, config: CircuitBreakerConfig):
+        """Initializes the CircuitBreaker.
+
+        Args:
+            config: The configuration for the circuit breaker.
+        """
         self.config = config
         self.state = CircuitState.CLOSED
         self.failure_count = 0
@@ -161,17 +181,19 @@ def retry_with_backoff(
     retry_config: RetryConfig,
     circuit_breaker: Optional[CircuitBreaker] = None,
 ):
-    """
-    Decorator to add retry logic with exponential backoff.
+    """A decorator that adds retry logic with exponential backoff to a function.
+
+    This decorator can be used to automatically retry a function that may fail
+    due to transient errors. It can also be combined with a `CircuitBreaker`
+    to prevent cascading failures.
 
     Args:
-        retry_config: Retry configuration
-        circuit_breaker: Optional circuit breaker for additional protection
+        retry_config: The configuration for the retry mechanism.
+        circuit_breaker: An optional `CircuitBreaker` instance to use.
 
     Returns:
-        Decorated function with retry logic
+        A decorated function with retry logic.
     """
-
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -261,7 +283,7 @@ class ResilientMlflowClient:
 
     @property
     def client(self) -> MlflowClient:
-        """Get or create MLflow client."""
+        """Returns the underlying MLflow client, creating it if necessary."""
         if self._client is None:
             self._client = MlflowClient(tracking_uri=self.tracking_uri)
         return self._client
@@ -372,7 +394,11 @@ class ResilientMlflowClient:
         return self.client.get_run(run_id)
 
     def get_circuit_breaker_state(self) -> dict:
-        """Get current circuit breaker state."""
+        """Returns the current state of the circuit breaker.
+
+        Returns:
+            A dictionary containing the current state of the circuit breaker.
+        """
         return self.circuit_breaker.get_state()
 
     def reset_circuit_breaker(self):
@@ -380,11 +406,14 @@ class ResilientMlflowClient:
         self.circuit_breaker.reset()
 
     def health_check(self) -> dict:
-        """
-        Check MLflow server health.
+        """Performs a health check of the MLflow server.
+
+        This method attempts to connect to the MLflow server and get its
+        version. It also returns the current state of the circuit breaker.
 
         Returns:
-            Health check result with status and circuit breaker state
+            A dictionary containing the health check status, and if
+            successful, the MLflow server version.
         """
         try:
             # Try to get server version as a health check
