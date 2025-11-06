@@ -9,12 +9,14 @@ Provides Prometheus metrics and a FastAPI middleware to measure:
 """
 
 from __future__ import annotations
+import re
+import time
+from typing import Callable
+
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-import time
-from typing import Callable
 
 REQUEST_COUNT = Counter(
     "ml_request_count",
@@ -38,6 +40,41 @@ MODEL_ACCURACY = Gauge(
     "ml_model_accuracy",
     "Current model accuracy as reported by trainer (0.0-1.0)"
 )
+
+_DIGIT_SEGMENT_RE = re.compile(r"^\d+$")
+_UUID_SEGMENT_RE = re.compile(r"^[0-9a-fA-F-]{8,}$")
+
+
+def _anonymize_path(path: str) -> str:
+    """Fallback anonymisation when no route template is available."""
+    if not path or path == "/":
+        return "/"
+
+    has_trailing_slash = path.endswith("/") and path != "/"
+    segments = [seg for seg in path.strip("/").split("/") if seg]
+    normalized_segments = []
+    for segment in segments:
+        if _DIGIT_SEGMENT_RE.match(segment) or _UUID_SEGMENT_RE.match(segment):
+            normalized_segments.append("{id}")
+        else:
+            normalized_segments.append(segment)
+
+    normalized_path = "/" + "/".join(normalized_segments)
+    if has_trailing_slash and normalized_path != "/":
+        normalized_path += "/"
+    return normalized_path
+
+
+def normalize_request_path(request: Request) -> str:
+    """Return the route template if available, otherwise use anonymised path."""
+    route = request.scope.get("route")
+    if route is not None:
+        for attr in ("path", "path_format"):
+            template = getattr(route, attr, None)
+            if template:
+                return template
+    return _anonymize_path(request.url.path)
+
 
 class PrometheusMiddleware(BaseHTTPMiddleware):
     """A Starlette middleware that collects Prometheus metrics for each request.
@@ -67,24 +104,27 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
         """
         start = time.time()
         method = request.method
-        path = request.url.path
+        normalized_path = None
         try:
             resp = await call_next(request)
             status_code = resp.status_code
         except Exception as exc:
             # Record errors as 500
-            REQUEST_ERRORS.labels(method=method, path=path).inc()
-            REQUEST_COUNT.labels(method=method, path=path, status="500").inc()
+            normalized_path = normalize_request_path(request)
+            REQUEST_ERRORS.labels(method=method, path=normalized_path).inc()
+            REQUEST_COUNT.labels(method=method, path=normalized_path, status="500").inc()
             raise
         finally:
             # record latency for all requests (success and exception)
+            if normalized_path is None:
+                normalized_path = normalize_request_path(request)
             latency = time.time() - start
-            REQUEST_LATENCY.labels(method=method, path=path).observe(latency)
+            REQUEST_LATENCY.labels(method=method, path=normalized_path).observe(latency)
 
         # record remaining metrics (not in finally to avoid duplication if exception occurs)
-        REQUEST_COUNT.labels(method=method, path=path, status=str(status_code)).inc()
+        REQUEST_COUNT.labels(method=method, path=normalized_path, status=str(status_code)).inc()
         if 500 <= status_code < 600:
-            REQUEST_ERRORS.labels(method=method, path=path).inc()
+            REQUEST_ERRORS.labels(method=method, path=normalized_path).inc()
         return resp
 
 def metrics_response() -> Response:
