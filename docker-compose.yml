@@ -15,7 +15,9 @@ services:
       - MODEL_AUTO_REFRESH_SECONDS=${MODEL_AUTO_REFRESH_SECONDS:-300}
       - MLFLOW_TRACKING_USERNAME=${MLFLOW_TRACKING_USERNAME:-}
       - MLFLOW_TRACKING_PASSWORD=${MLFLOW_TRACKING_PASSWORD:-}
-      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN:-dev-admin-token}
+      # SECURITY: ADMIN_API_TOKEN must be explicitly set - no default value provided
+      # Generate a secure token: openssl rand -hex 32
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN:?ADMIN_API_TOKEN must be explicitly set for security}
       - ADMIN_TOKEN_HEADER=${ADMIN_TOKEN_HEADER:-X-Admin-Token}
       - LOG_LEVEL=INFO
     volumes:

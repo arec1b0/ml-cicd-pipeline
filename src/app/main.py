@@ -9,8 +9,11 @@ import asyncio
 import contextlib
 import logging
 from datetime import datetime, timezone
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from typing import Optional
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from src.app.config import (
     MODEL_PATH,
@@ -76,7 +79,12 @@ def create_app() -> FastAPI:
         )
     
     app = FastAPI(title="ml-cicd-pipeline-inference", version="0.1.0")
-    
+
+    # Initialize rate limiter - 100 requests per minute per IP
+    limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
     # Instrument FastAPI with OpenTelemetry (must be before middleware registration)
     instrument_fastapi(app)
 

@@ -7,15 +7,32 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-def _get_int(name: str, default: int) -> int:
+def _get_int(name: str, default: int, max_value: int | None = None) -> int:
     """
-    Read environment variable as int with fallback.
+    Read environment variable as int with fallback and optional max value validation.
+
+    Args:
+        name: The name of the environment variable.
+        default: The default value to use if the environment variable is not set.
+        max_value: The maximum allowed value (inclusive). If exceeded, raises ValueError.
+
+    Returns:
+        The value of the environment variable as an integer.
+
+    Raises:
+        ValueError: If the value exceeds max_value.
     """
     raw = get_env(name)
     if raw is None:
         return default
     try:
-        return int(raw)
+        value = int(raw)
+        if max_value is not None and value > max_value:
+            raise ValueError(
+                f"Security: {name}={value} exceeds maximum allowed value of {max_value}. "
+                f"This could lead to resource exhaustion."
+            )
+        return value
     except ValueError:
         return default
 
@@ -44,7 +61,12 @@ MODEL_SOURCE = get_env("MODEL_SOURCE", "mlflow")
 MODEL_CACHE_DIR = Path(get_env("MODEL_CACHE_DIR", "/var/cache/ml-model"))
 
 # Interval in seconds for auto-refreshing the model. 0 disables it.
-MODEL_AUTO_REFRESH_SECONDS = _get_int("MODEL_AUTO_REFRESH_SECONDS", 0)
+# Maximum value: 3600 seconds (1 hour) to prevent resource exhaustion
+MODEL_AUTO_REFRESH_SECONDS = _get_int("MODEL_AUTO_REFRESH_SECONDS", 0, max_value=3600)
+
+# Maximum batch size for inference requests to prevent DoS attacks
+# Maximum value: 10000 to prevent resource exhaustion
+MAX_BATCH_SIZE = _get_int("MAX_BATCH_SIZE", 1000, max_value=10000)
 
 # Logging level for the application (e.g., "INFO", "DEBUG").
 LOG_LEVEL = get_env("LOG_LEVEL", "INFO")
