@@ -396,6 +396,41 @@ class DriftMonitor:
                 events.append(payload)
         return events
 
+    def _sanitize_loki_query(self, query: str) -> str:
+        """Sanitizes a Loki query to prevent LogQL injection.
+
+        This method validates the query string to ensure it doesn't contain
+        potentially dangerous characters or patterns that could be used for
+        injection attacks.
+
+        Args:
+            query: The Loki query to sanitize.
+
+        Returns:
+            The sanitized query string.
+
+        Raises:
+            ValueError: If the query contains dangerous characters.
+        """
+        # List of potentially dangerous characters that could be used for injection
+        dangerous_chars = [';', '&', '|', '`', '$', '(', ')', '<', '>', '\n', '\r']
+
+        for char in dangerous_chars:
+            if char in query:
+                raise ValueError(
+                    f"Security: Loki query contains potentially dangerous character '{char}'. "
+                    f"Query rejected to prevent LogQL injection."
+                )
+
+        # Ensure query length is reasonable
+        if len(query) > 1000:
+            raise ValueError(
+                "Security: Loki query exceeds maximum length of 1000 characters. "
+                "Query rejected to prevent abuse."
+            )
+
+        return query
+
     def _collect_from_loki(self) -> list[dict[str, Any]]:
         """Collects log events from Loki.
 
@@ -407,10 +442,18 @@ class DriftMonitor:
         """
         if not self.settings.loki_base_url or not self.settings.loki_query:
             return []
+
+        # Sanitize query to prevent LogQL injection
+        try:
+            sanitized_query = self._sanitize_loki_query(self.settings.loki_query)
+        except ValueError as exc:
+            logger.error("Loki query validation failed: %s", exc)
+            return []
+
         end = datetime.now(timezone.utc)
         start = end - timedelta(minutes=self.settings.loki_range_minutes)
         params = {
-            "query": self.settings.loki_query,
+            "query": sanitized_query,
             "start": int(start.timestamp() * 1e9),
             "end": int(end.timestamp() * 1e9),
             "direction": "forward",

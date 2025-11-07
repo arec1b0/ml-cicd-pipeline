@@ -11,7 +11,10 @@ import logging
 import os
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
+from src.app.config import MAX_BATCH_SIZE
 from src.utils.drift import emit_prediction_log
 from src.utils.tracing import get_tracer
 
@@ -19,9 +22,9 @@ logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
 
 router = APIRouter(prefix="/predict", tags=["predict"])
+limiter = Limiter(key_func=get_remote_address)
 
-# Batch size and feature dimension limits
-MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "1000"))
+# Feature dimension limit
 EXPECTED_FEATURE_DIMENSION = int(os.getenv("EXPECTED_FEATURE_DIMENSION", "10"))
 
 # Input schema: list of numeric feature vectors.
@@ -44,6 +47,7 @@ class PredictResponse(BaseModel):
     predictions: List[int]
 
 @router.post("/", response_model=PredictResponse)
+@limiter.limit("100/minute")
 async def predict(request: Request, payload: PredictRequest, background_tasks: BackgroundTasks) -> PredictResponse:
     """Runs model inference on a batch of feature vectors.
 
