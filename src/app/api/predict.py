@@ -24,8 +24,9 @@ tracer = get_tracer(__name__)
 router = APIRouter(prefix="/predict", tags=["predict"])
 limiter = Limiter(key_func=get_remote_address)
 
-# Feature dimension limit
-EXPECTED_FEATURE_DIMENSION = int(os.getenv("EXPECTED_FEATURE_DIMENSION", "10"))
+# Feature dimension limit - default to 4 for Iris dataset
+# This can be overridden by environment variable or dynamically set from model metadata
+EXPECTED_FEATURE_DIMENSION = int(os.getenv("EXPECTED_FEATURE_DIMENSION", "4"))
 
 # Input schema: list of numeric feature vectors.
 class PredictRequest(BaseModel):
@@ -34,7 +35,7 @@ class PredictRequest(BaseModel):
     Attributes:
         features: A batch of feature vectors, where each feature vector is a list of floats.
                   Batch size must not exceed MAX_BATCH_SIZE, and each feature vector must
-                  have EXPECTED_FEATURE_DIMENSION elements.
+                  match the model's expected input dimension (default: 4 for Iris dataset).
     """
     features: List[List[float]] = Field(..., description="A batch of input features")
 
@@ -78,6 +79,10 @@ async def predict(request: Request, payload: PredictRequest, background_tasks: B
         logger.error("Model not loaded", extra={"correlation_id": correlation_id})
         raise HTTPException(status_code=503, detail="Model not loaded")
 
+    # Get the expected feature dimension from app state (set at startup from model)
+    # Falls back to global EXPECTED_FEATURE_DIMENSION if not set
+    expected_dim = getattr(app.state, "expected_feature_dimension", EXPECTED_FEATURE_DIMENSION)
+
     # Validate batch size
     batch_size = len(payload.features)
     if batch_size == 0:
@@ -105,20 +110,20 @@ async def predict(request: Request, payload: PredictRequest, background_tasks: B
                 extra={"correlation_id": correlation_id, "feature_index": i}
             )
             raise HTTPException(status_code=400, detail=f"features[{i}] must be a non-empty list of numbers")
-        
-        if len(row) != EXPECTED_FEATURE_DIMENSION:
+
+        if len(row) != expected_dim:
             logger.warning(
                 f"Invalid feature dimension at index {i}",
                 extra={
                     "correlation_id": correlation_id,
                     "feature_index": i,
-                    "expected_dimension": EXPECTED_FEATURE_DIMENSION,
+                    "expected_dimension": expected_dim,
                     "actual_dimension": len(row)
                 }
             )
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid feature dimension at index {i}. Expected {EXPECTED_FEATURE_DIMENSION}, got {len(row)}"
+                detail=f"Invalid feature dimension at index {i}. Expected {expected_dim}, got {len(row)}"
             )
 
     logger.info(

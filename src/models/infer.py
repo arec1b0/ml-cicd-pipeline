@@ -28,6 +28,33 @@ class ModelWrapper:
         self._is_onnx = is_onnx
         self._input_name = input_name or "float_input"
 
+    def get_input_dimension(self) -> Optional[int]:
+        """
+        Get the expected input feature dimension from the model.
+        Returns:
+            int: Number of expected input features, or None if cannot be determined.
+        """
+        try:
+            if self._is_onnx:
+                # Get input shape from ONNX model
+                input_meta = self._model.get_inputs()[0]
+                shape = input_meta.shape
+                # Shape is typically [batch_size, n_features]
+                # batch_size is often dynamic (-1 or 'N'), so get second dimension
+                if len(shape) >= 2:
+                    dim = shape[1]
+                    # Return only if it's a concrete integer (not dynamic)
+                    if isinstance(dim, int) and dim > 0:
+                        return dim
+            else:
+                # Try to get from sklearn model
+                # Most sklearn models have n_features_in_ attribute after fitting
+                if hasattr(self._model, 'n_features_in_'):
+                    return int(self._model.n_features_in_)
+        except Exception as exc:
+            logger.warning(f"Failed to extract input dimension from model: {exc}")
+        return None
+
     def predict(self, features: Sequence[Sequence[float]]) -> list:
         """
         Predict labels for batch of feature vectors.

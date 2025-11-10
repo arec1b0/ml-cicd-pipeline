@@ -124,6 +124,7 @@ The service can be configured using environment variables. The most important va
 *   `MLFLOW_TRACKING_URI`: The URI of the MLflow tracking server.
 *   `MLFLOW_MODEL_NAME`: The name of the model in the MLflow model registry.
 *   `MLFLOW_MODEL_STAGE`: The stage of the model in the MLflow model registry. Defaults to `Production`.
+*   `EXPECTED_FEATURE_DIMENSION`: The expected number of input features for the model. Defaults to `4` (for Iris dataset). This value is automatically derived from the loaded model metadata at startup. You only need to set this explicitly if you want to override the auto-detected value.
 *   `LOG_LEVEL`: The logging level. Defaults to `INFO`.
 *   `LOG_FORMAT`: The log format. Can be `json` or `text`. Defaults to `json`.
 
