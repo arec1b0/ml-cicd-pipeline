@@ -58,21 +58,21 @@ networkPolicy:
       app: prometheus
   egress:
     mlflow:
-      enabled: false
+      enabled: true
       namespace: default
       namespaceLabels: {}
       podLabels:
         app: mlflow
       port: 5000
     loki:
-      enabled: false
+      enabled: true
       namespace: monitoring
       namespaceLabels: {}
       podLabels:
         app: loki
       port: 3100
     jaeger:
-      enabled: false
+      enabled: true
       namespace: monitoring
       namespaceLabels: {}
       podLabels:
