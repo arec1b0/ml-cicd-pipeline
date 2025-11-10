@@ -15,6 +15,9 @@ services:
       - MODEL_AUTO_REFRESH_SECONDS=${MODEL_AUTO_REFRESH_SECONDS:-300}
       - MLFLOW_TRACKING_USERNAME=${MLFLOW_TRACKING_USERNAME:-}
       - MLFLOW_TRACKING_PASSWORD=${MLFLOW_TRACKING_PASSWORD:-}
+      # EXPECTED_FEATURE_DIMENSION: Optional override for model input dimension
+      # Default: 4 (Iris dataset), but automatically derived from model metadata at startup
+      # - EXPECTED_FEATURE_DIMENSION=${EXPECTED_FEATURE_DIMENSION:-4}
       # SECURITY: ADMIN_API_TOKEN must be explicitly set - no default value provided
       # Generate a secure token: openssl rand -hex 32
       - ADMIN_API_TOKEN=${ADMIN_API_TOKEN:?ADMIN_API_TOKEN must be explicitly set for security}

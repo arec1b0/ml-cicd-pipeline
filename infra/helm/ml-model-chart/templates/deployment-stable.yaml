@@ -52,6 +52,10 @@ spec:
               value: {{ .Values.env.modelCacheDir | default "/var/cache/ml-model" | quote }}
             - name: MODEL_AUTO_REFRESH_SECONDS
               value: {{ .Values.env.modelAutoRefreshSeconds | default 0 | quote }}
+            {{- if .Values.env.expectedFeatureDimension }}
+            - name: EXPECTED_FEATURE_DIMENSION
+              value: {{ .Values.env.expectedFeatureDimension | quote }}
+            {{- end }}
             {{- with .Values.env.mlflow }}
             {{- if .modelName }}
             - name: MLFLOW_MODEL_NAME

@@ -86,6 +86,7 @@ env:
   modelPath: ""  # leave blank to use runtime downloads
   modelCacheDir: /var/cache/ml-model
   modelAutoRefreshSeconds: 300
+  expectedFeatureDimension: ""  # Optional override for model input dimension (default: 4 for Iris, auto-derived from model at startup)
   mlflow:
     modelName: iris-random-forest
     modelStage: Production

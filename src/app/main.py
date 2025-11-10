@@ -120,6 +120,7 @@ def create_app() -> FastAPI:
         app.state.ml_metrics = None
         app.state.model_metadata = None
         app.state.is_ready = False
+        app.state.expected_feature_dimension = None
         MODEL_ACCURACY.set(0)
         app.state.mlflow_connectivity = {"status": "unknown"}
 
@@ -128,17 +129,66 @@ def create_app() -> FastAPI:
 
         This function updates the application state with the new model wrapper,
         metrics, and metadata. It also sets the readiness flag and updates
-        Prometheus metrics.
+        Prometheus metrics. It also validates and sets the expected feature dimension.
 
         Args:
             state: The loaded model state to apply.
         """
+        log = logging.getLogger(__name__)
+
+        # Get feature dimension from model
+        model_feature_dim = state.wrapper.get_input_dimension()
+
+        # Get the environment variable setting (if present)
+        import os
+        env_feature_dim = os.getenv("EXPECTED_FEATURE_DIMENSION")
+
+        # Determine which dimension to use and validate
+        if model_feature_dim is not None:
+            # Use model-derived dimension
+            app.state.expected_feature_dimension = model_feature_dim
+
+            # Warn if environment variable is set but doesn't match
+            if env_feature_dim is not None:
+                env_dim_int = int(env_feature_dim)
+                if env_dim_int != model_feature_dim:
+                    log.warning(
+                        "EXPECTED_FEATURE_DIMENSION mismatch: environment variable (%d) differs from model (%d). Using model dimension.",
+                        env_dim_int,
+                        model_feature_dim,
+                        extra={
+                            "env_dimension": env_dim_int,
+                            "model_dimension": model_feature_dim,
+                        },
+                    )
+
+            log.info(
+                "Feature dimension validation complete",
+                extra={
+                    "expected_feature_dimension": model_feature_dim,
+                    "source": "model_metadata",
+                },
+            )
+        else:
+            # Fallback to environment variable or default
+            from src.app.api.predict import EXPECTED_FEATURE_DIMENSION
+            app.state.expected_feature_dimension = EXPECTED_FEATURE_DIMENSION
+            log.warning(
+                "Could not derive feature dimension from model, using fallback value: %d",
+                EXPECTED_FEATURE_DIMENSION,
+                extra={
+                    "expected_feature_dimension": EXPECTED_FEATURE_DIMENSION,
+                    "source": "environment_or_default",
+                },
+            )
+
         metadata: dict[str, object] = {
             "source": state.descriptor.source,
             "model_uri": state.descriptor.model_uri,
             "artifact_path": str(state.artifact_path),
             "model_file": str(state.model_file),
             "loaded_at": datetime.now(tz=timezone.utc).isoformat(),
+            "expected_feature_dimension": app.state.expected_feature_dimension,
         }
         if state.descriptor.version is not None:
             metadata["version"] = state.descriptor.version
@@ -163,7 +213,6 @@ def create_app() -> FastAPI:
             "model_uri": state.descriptor.model_uri,
         }
 
-        log = logging.getLogger(__name__)
         log.info(
             "Applied model state",
             extra={
@@ -171,6 +220,7 @@ def create_app() -> FastAPI:
                 "version": state.descriptor.version,
                 "stage": state.descriptor.stage,
                 "accuracy": state.accuracy,
+                "expected_feature_dimension": app.state.expected_feature_dimension,
             },
         )
 
