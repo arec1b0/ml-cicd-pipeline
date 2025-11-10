@@ -18,17 +18,16 @@ spec:
         app: {{ include "ml-model-chart.name" . }}
         release: canary
     spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "ml-model-chart.serviceAccountName" . }}
+      {{- end }}
       {{- $adminSecretName := "" }}
       {{- if .Values.env.adminTokenSecretName }}
         {{- $adminSecretName = .Values.env.adminTokenSecretName }}
-      {{- else if .Values.env.adminTokenSecretValue }}
-        {{- $adminSecretName = printf "%s-admin-token" (include "ml-model-chart.fullname" .) }}
       {{- end }}
       {{- $mlflowPasswordSecretName := "" }}
       {{- if .Values.env.mlflow.trackingPasswordSecretName }}
         {{- $mlflowPasswordSecretName = .Values.env.mlflow.trackingPasswordSecretName }}
-      {{- else if .Values.env.mlflow.trackingPasswordSecretValue }}
-        {{- $mlflowPasswordSecretName = printf "%s-mlflow-credentials" (include "ml-model-chart.fullname" .) }}
       {{- end }}
       securityContext:
         runAsNonRoot: true

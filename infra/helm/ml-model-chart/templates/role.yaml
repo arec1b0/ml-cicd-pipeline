@@ -1,0 +1,23 @@
+{{- if and .Values.rbac.create .Values.serviceAccount.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "ml-model-chart.fullname" . }}
+  labels:
+    app: {{ include "ml-model-chart.name" . }}
+    release: {{ .Release.Name }}
+rules:
+  # Minimal permissions for reading configuration
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  # Minimal permissions for reading secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  {{- with .Values.rbac.rules }}
+  # Additional custom rules
+{{ toYaml . | indent 2 }}
+  {{- end }}
+{{- end -}}
+

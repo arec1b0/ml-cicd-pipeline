@@ -1,0 +1,18 @@
+{{- if and .Values.rbac.create .Values.serviceAccount.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "ml-model-chart.fullname" . }}
+  labels:
+    app: {{ include "ml-model-chart.name" . }}
+    release: {{ .Release.Name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "ml-model-chart.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "ml-model-chart.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end -}}
+

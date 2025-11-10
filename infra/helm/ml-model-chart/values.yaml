@@ -93,14 +93,53 @@ env:
     modelVersion: ""  # optional explicit version override
     trackingUri: ""   # e.g., http://mlflow:5000
     trackingUsername: ""
-    trackingPasswordSecretName: ""
-    trackingPasswordSecretKey: password
-    trackingPasswordSecretValue: ""
+    trackingPasswordSecretName: ""  # REQUIRED: Reference to a Kubernetes Secret providing MLFLOW_TRACKING_PASSWORD
+    trackingPasswordSecretKey: password  # Key within the secret
   adminTokenHeader: X-Admin-Token
-  adminTokenSecretName: ""   # set to reference a Kubernetes Secret providing ADMIN_API_TOKEN
-  adminTokenSecretKey: token
-  adminTokenSecretValue: ""   # when set, chart will generate a secret automatically
-  adminTokenSecretAnnotations: {}
+  adminTokenSecretName: ""   # REQUIRED: Reference to a Kubernetes Secret providing ADMIN_API_TOKEN
+  adminTokenSecretKey: token  # Key within the secret
+  # Note: Secrets must be created externally using External Secrets Operator, Sealed Secrets, or kubectl
+  # See SECRET_MANAGEMENT.md for detailed instructions
   otelExporterOtlpEndpoint: ""  # Set to e.g., http://tempo:4317 for tracing
   otelServiceName: ml-cicd-pipeline
   otelResourceAttributes: "deployment.environment=production"
+
+# ServiceAccount configuration
+serviceAccount:
+  # Specifies whether a ServiceAccount should be created
+  create: true
+  # Annotations to add to the ServiceAccount
+  annotations: {}
+  # The name of the ServiceAccount to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# RBAC configuration
+rbac:
+  # Specifies whether RBAC resources should be created
+  create: true
+  # Additional rules to add to the Role (beyond the default minimal permissions)
+  rules: []
+
+# External Secrets Operator configuration
+externalSecrets:
+  # Enable External Secrets Operator integration
+  enabled: false
+  # Reference to ExternalSecretStore (e.g., "aws-secrets-manager" or "vault-backend")
+  storeRef: ""
+  # Admin token secret configuration
+  adminToken:
+    # Secret name in external store
+    secretName: ""
+    # Key in external secret
+    secretKey: "token"
+    # Refresh interval (e.g., "1h", "30m")
+    refreshInterval: "1h"
+  # MLflow credentials secret configuration
+  mlflowCredentials:
+    # Secret name in external store
+    secretName: ""
+    # Key in external secret
+    secretKey: "password"
+    # Refresh interval (e.g., "1h", "30m")
+    refreshInterval: "1h"
