@@ -35,6 +35,7 @@ from src.app.config import (
 )
 from src.app.api.health import router as health_router
 from src.app.api.predict import router as predict_router
+from src.app.api.explain import router as explain_router
 from src.app.api.metrics import router as metrics_router
 from src.app.api.admin import router as admin_router
 from src.models.manager import ModelManager, LoadedModel
@@ -91,6 +92,7 @@ def create_app() -> FastAPI:
     # register routers
     app.include_router(health_router)
     app.include_router(predict_router)
+    app.include_router(explain_router)
     app.include_router(metrics_router)
     app.include_router(admin_router)
 

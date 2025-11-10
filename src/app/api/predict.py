@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import List
 import logging
 import os
+import numpy as np
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 from slowapi import Limiter
@@ -17,6 +18,7 @@ from slowapi.util import get_remote_address
 from src.app.config import MAX_BATCH_SIZE
 from src.utils.drift import emit_prediction_log
 from src.utils.tracing import get_tracer
+from src.data.feature_statistics import get_feature_statistics, validate_feature_range
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
@@ -125,6 +127,41 @@ async def predict(request: Request, payload: PredictRequest, background_tasks: B
                 status_code=400,
                 detail=f"Invalid feature dimension at index {i}. Expected {expected_dim}, got {len(row)}"
             )
+        
+        # Validate feature values: check for NaN and infinity
+        for j, value in enumerate(row):
+            try:
+                # Check for NaN and infinity
+                if not np.isfinite(value):
+                    logger.warning(
+                        f"Invalid value in features[{i}][{j}]",
+                        extra={
+                            "correlation_id": correlation_id,
+                            "feature_index": i,
+                            "value_index": j,
+                            "value": value
+                        }
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid value in features[{i}][{j}]: {value} (NaN or infinity not allowed)"
+                    )
+            except (TypeError, ValueError):
+                # Handle cases where value cannot be converted to float
+                logger.warning(
+                    f"Non-numeric value in features[{i}][{j}]",
+                    extra={
+                        "correlation_id": correlation_id,
+                        "feature_index": i,
+                        "value_index": j,
+                        "value": value,
+                        "type": type(value).__name__
+                    }
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid value in features[{i}][{j}]: {value} (must be numeric)"
+                )
 
     logger.info(
         "Processing prediction request",
