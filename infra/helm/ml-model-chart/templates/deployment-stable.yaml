@@ -29,10 +29,84 @@ spec:
       {{- else if .Values.env.mlflow.trackingPasswordSecretValue }}
         {{- $mlflowPasswordSecretName = printf "%s-mlflow-credentials" (include "ml-model-chart.fullname" .) }}
       {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: model-prefetch
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: MODEL_SOURCE
+              value: {{ .Values.env.modelSource | default "mlflow" | quote }}
+            - name: MODEL_CACHE_DIR
+              value: {{ .Values.env.modelCacheDir | default "/var/cache/ml-model" | quote }}
+            {{- with .Values.env.mlflow }}
+            {{- if .modelName }}
+            - name: MLFLOW_MODEL_NAME
+              value: {{ .modelName | quote }}
+            {{- end }}
+            {{- if .modelStage }}
+            - name: MLFLOW_MODEL_STAGE
+              value: {{ .modelStage | quote }}
+            {{- end }}
+            {{- if .modelVersion }}
+            - name: MLFLOW_MODEL_VERSION
+              value: {{ .modelVersion | quote }}
+            {{- end }}
+            {{- if .trackingUri }}
+            - name: MLFLOW_TRACKING_URI
+              value: {{ .trackingUri | quote }}
+            {{- end }}
+            {{- if .trackingUsername }}
+            - name: MLFLOW_TRACKING_USERNAME
+              value: {{ .trackingUsername | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $mlflowPasswordSecretName }}
+            - name: MLFLOW_TRACKING_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mlflowPasswordSecretName | quote }}
+                  key: {{ .Values.env.mlflow.trackingPasswordSecretKey | default "password" | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ .Values.env.modelCacheDir | default "/var/cache/ml-model" | quote }}
+          command:
+            - python
+            - -c
+            - |
+              from src.model.manager import ModelManager
+              import os
+              print("Pre-fetching model to cache...")
+              manager = ModelManager()
+              model = manager.load_model()
+              print(f"Model pre-fetched successfully: {type(model)}")
       containers:
         - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: {{ .Values.service.port }}
           env:
@@ -115,6 +189,18 @@ spec:
               port: {{ .Values.service.port }}
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
           {{- if .Values.resources }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
