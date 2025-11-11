@@ -75,17 +75,20 @@ jobs:
             kubectl rollout history deployment/$RELEASE_NAME || true
 
             # Get previous revision
-            PREV_REVISION=$(kubectl rollout history deployment/$RELEASE_NAME --revision=0 -o json | \
-              jq -r '.metadata.annotations."deployment.kubernetes.io/revision"' 2>/dev/null || echo "")
+            # Get current revision number
+            CURRENT_REV=$(kubectl get deployment/$RELEASE_NAME -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}')
 
-            if [ -z "$PREV_REVISION" ] || [ "$PREV_REVISION" = "null" ]; then
+            # Get previous revision (current - 1)
+            PREV_REV=$((CURRENT_REV - 1))
+
+            if [ -z "$PREV_REV" ] || [ "$PREV_REV" -lt 1 ]; then
               echo "ERROR: Cannot determine previous revision"
               echo "Please specify target_tag manually"
               exit 1
             fi
 
             # Extract image from previous revision
-            PREV_IMAGE=$(kubectl rollout history deployment/$RELEASE_NAME --revision=$((PREV_REVISION - 1)) -o json 2>/dev/null | \
+            PREV_IMAGE=$(kubectl rollout history deployment/$RELEASE_NAME --revision=$PREV_REV -o json 2>/dev/null | \
               jq -r '.spec.template.spec.containers[0].image' 2>/dev/null || echo "")
 
             if [ -z "$PREV_IMAGE" ] || [ "$PREV_IMAGE" = "null" ]; then
@@ -120,6 +123,10 @@ jobs:
 
           # Verify image exists
           echo "Verifying target image exists..."
+          # Login to registry
+          echo "${{ secrets.REGISTRY_TOKEN }}" | crane auth login ${{ secrets.REGISTRY_HOST }} -u ${{ secrets.REGISTRY_USER }} --password-stdin
+          
+          # Then verify image
           if ! crane digest "${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:$TARGET_TAG" 2>/dev/null; then
             echo "ERROR: Target image does not exist: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:$TARGET_TAG"
             echo "Available tags:"
@@ -263,7 +270,7 @@ jobs:
           echo "## Rollback Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ $? -eq 0 ]; then
+          if [ "$ROLLBACK_STATUS" = "success" ]; then
             echo "- **Status**: ✅ Rollback successful" >> $GITHUB_STEP_SUMMARY
           else
             echo "- **Status**: ❌ Rollback failed" >> $GITHUB_STEP_SUMMARY
