@@ -18,8 +18,8 @@ env:
   CHART_PATH: infra/helm/ml-model-chart
   RELEASE_NAME: ml-model
   OBSERVATION_PORT: 18080
-  MODEL_REGISTRY_NAME: iris-random-forest
-  MODEL_STAGE: production
+  MODEL_REGISTRY_NAME: ${{ vars.MODEL_REGISTRY_NAME || 'iris-random-forest' }}
+  MODEL_STAGE: ${{ vars.MODEL_STAGE || 'production' }}
 
 jobs:
   build-and-push:
@@ -74,7 +74,114 @@ jobs:
             MODEL_URI=${{ env.MODEL_URI }}
             MLFLOW_TRACKING_URI=${{ secrets.MLFLOW_TRACKING_URI }}
       - name: Set image output
+        id: set-image
         run: echo "image=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Trivy security scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+        continue-on-error: false
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Check Trivy scan for blocking vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.4.0
+
+      - name: Sign container image with Cosign
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          echo "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+          cosign sign --yes --key cosign.key ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}
+          rm cosign.key
+
+      - name: Generate SLSA provenance attestation
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          # Write key to file
+          echo "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+
+          # Generate provenance predicate
+          cat > provenance.json <<EOF
+          {
+            "builder": {
+              "id": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            },
+            "buildType": "https://github.com/Attestations/GitHubActionsWorkflow@v1",
+            "invocation": {
+              "configSource": {
+                "uri": "git+https://github.com/${{ github.repository }}@${{ github.ref }}",
+                "digest": {
+                  "sha1": "${{ github.sha }}"
+                },
+                "entryPoint": ".github/workflows/deploy-canary-and-promote.yml"
+              }
+            },
+            "metadata": {
+              "buildStartedOn": "${{ github.event.head_commit.timestamp }}",
+              "buildFinishedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "completeness": {
+                "parameters": true,
+                "environment": false,
+                "materials": false
+              },
+              "reproducible": false
+            },
+            "materials": [
+              {
+                "uri": "git+https://github.com/${{ github.repository }}@${{ github.ref }}",
+                "digest": {
+                  "sha1": "${{ github.sha }}"
+                }
+              }
+            ]
+          }
+          EOF
+
+          # Attest the provenance
+          cosign attest --yes --key cosign.key \
+            --predicate provenance.json \
+            --type slsaprovenance \
+            ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}
+
+          rm cosign.key provenance.json
+
+      - name: Create attestation summary
+        run: |
+          echo "## Container Image Attestation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Security Scan**: ✅ Passed (Trivy)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Signed**: ✅ Yes (Cosign)" >> $GITHUB_STEP_SUMMARY
+          echo "- **SLSA Provenance**: ✅ Attested" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Verify signature" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "cosign verify --key cosign.pub ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Verify attestation" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "cosign verify-attestation --key cosign.pub --type slsaprovenance ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
   deploy-canary:
     name: Deploy canary and evaluate metrics
@@ -99,82 +206,249 @@ jobs:
         env:
           KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
         run: |
-          echo "$KUBE_CONFIG_DATA" | base64 --decode > kubeconfig
+          set -e
+          if [ -z "$KUBE_CONFIG_DATA" ]; then
+            echo "ERROR: KUBE_CONFIG_DATA secret is not set"
+            exit 1
+          fi
+          echo "$KUBE_CONFIG_DATA" | base64 --decode > kubeconfig || {
+            echo "ERROR: Failed to decode KUBE_CONFIG_DATA"
+            exit 1
+          }
           export KUBECONFIG=$(pwd)/kubeconfig
-          kubectl version --client
+          kubectl version --client || {
+            echo "ERROR: kubectl is not properly configured"
+            exit 1
+          }
 
       - name: Ensure stable exists (install/update)
         run: |
+          set -e
           export KUBECONFIG=$(pwd)/kubeconfig
-          helm upgrade --install $RELEASE_NAME $CHART_PATH --set nameOverride=$RELEASE_NAME --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }}
+          helm upgrade --install $RELEASE_NAME $CHART_PATH \
+            --set nameOverride=$RELEASE_NAME \
+            --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }} \
+            --timeout 5m \
+            --wait || {
+            echo "ERROR: Failed to ensure stable release exists"
+            kubectl get pods -l app=$RELEASE_NAME || true
+            kubectl describe deployment/$RELEASE_NAME || true
+            exit 1
+          }
 
       - name: Deploy canary release (low weight)
         run: |
+          set -e
           export KUBECONFIG=$(pwd)/kubeconfig
-          helm upgrade --install $RELEASE_NAME-canary $CHART_PATH --set nameOverride=$RELEASE_NAME --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},canary.enabled=true --set canary.image.tag=${{ github.sha }} --set canary.weight=10
+          helm upgrade --install $RELEASE_NAME-canary $CHART_PATH \
+            --set nameOverride=$RELEASE_NAME \
+            --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},canary.enabled=true \
+            --set canary.image.tag=${{ github.sha }} \
+            --set canary.weight=10 \
+            --timeout 5m \
+            --wait || {
+            echo "ERROR: Failed to deploy canary release"
+            kubectl get pods -l app=$RELEASE_NAME-canary || true
+            kubectl describe deployment/$RELEASE_NAME-canary || true
+            exit 1
+          }
 
       - name: Wait for canary pods ready
         run: |
+          set -e
           export KUBECONFIG=$(pwd)/kubeconfig
           echo "Waiting for canary pods..."
-          kubectl wait --for=condition=available --timeout=120s deploy/$RELEASE_NAME-canary || true
+          if ! kubectl wait --for=condition=available --timeout=120s deploy/$RELEASE_NAME-canary; then
+            echo "ERROR: Canary pods did not become ready in time"
+            kubectl get pods -l app=$RELEASE_NAME-canary || true
+            kubectl describe deployment/$RELEASE_NAME-canary || true
+            kubectl logs -l app=$RELEASE_NAME-canary --tail=50 || true
+            exit 1
+          fi
           sleep 10
 
       - name: Port-forward, run smoke tests, and evaluate metrics
         env:
           OBSERVATION_PORT: ${{ env.OBSERVATION_PORT }}
         run: |
-          export KUBECONFIG=$(pwd)/kubeconfig
-          # start port-forward in background
-          kubectl port-forward svc/${{ env.RELEASE_NAME }}-canary-svc ${{ env.OBSERVATION_PORT }}:8000 --kubeconfig kubeconfig >/tmp/portfw.log 2>&1 &
-          sleep 4
           set -e
-          # smoke tests
-          curl -sS --fail http://127.0.0.1:${OBSERVATION_PORT}/health/ || { echo "health failed"; exit 1; }
-          curl -sS --fail -X POST http://127.0.0.1:${OBSERVATION_PORT}/predict/ -H "Content-Type: application/json" -d '{"features":[[5.1,3.5,1.4,0.2]]}' || { echo "predict failed"; exit 1; }
-          echo "smoke tests ok"
-          # evaluate metrics
-          METRIC=$(curl -sS http://127.0.0.1:${OBSERVATION_PORT}/metrics | awk '/^ml_model_accuracy /{print $2; exit}')
-          echo "raw ml_model_accuracy=$METRIC"
-          if [ -z "$METRIC" ]; then
-            echo "Metric ml_model_accuracy not found. Failing gate."
-            # uninstall canary before fail
-            export KUBECONFIG=$(pwd)/kubeconfig
-            helm uninstall $RELEASE_NAME-canary || true
+          export KUBECONFIG=$(pwd)/kubeconfig
+
+          # Cleanup function for canary on failure
+          cleanup_canary() {
+            echo "Cleaning up canary deployment..."
+            helm uninstall $RELEASE_NAME-canary --kubeconfig kubeconfig || true
+          }
+
+          # Start port-forward in background
+          echo "Starting port-forward to canary service..."
+          kubectl port-forward svc/${{ env.RELEASE_NAME }}-canary-svc ${{ env.OBSERVATION_PORT }}:8000 --kubeconfig kubeconfig >/tmp/portfw.log 2>&1 &
+          PORT_FW_PID=$!
+
+          # Wait for port-forward to be ready
+          for i in {1..10}; do
+            if curl -sS http://127.0.0.1:${OBSERVATION_PORT}/health/ >/dev/null 2>&1; then
+              echo "Port-forward ready"
+              break
+            fi
+            if [ $i -eq 10 ]; then
+              echo "ERROR: Port-forward failed to become ready"
+              cat /tmp/portfw.log || true
+              kill $PORT_FW_PID || true
+              cleanup_canary
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # Smoke test: health check
+          echo "Running health check..."
+          if ! curl -sS --fail http://127.0.0.1:${OBSERVATION_PORT}/health/; then
+            echo "ERROR: Health check failed"
+            kill $PORT_FW_PID || true
+            cleanup_canary
             exit 1
           fi
-          # export METRIC for Python subprocess
+          echo "✓ Health check passed"
+
+          # Smoke test: prediction
+          echo "Running prediction test..."
+          if ! PRED_RESPONSE=$(curl -sS --fail -X POST http://127.0.0.1:${OBSERVATION_PORT}/predict/ \
+            -H "Content-Type: application/json" \
+            -d '{"features":[[5.1,3.5,1.4,0.2]]}'); then
+            echo "ERROR: Prediction test failed"
+            kill $PORT_FW_PID || true
+            cleanup_canary
+            exit 1
+          fi
+          echo "✓ Prediction test passed: $PRED_RESPONSE"
+
+          # Evaluate metrics
+          echo "Fetching model accuracy metric..."
+          METRIC=$(curl -sS http://127.0.0.1:${OBSERVATION_PORT}/metrics | awk '/^ml_model_accuracy /{print $2; exit}')
+          echo "raw ml_model_accuracy=$METRIC"
+
+          if [ -z "$METRIC" ]; then
+            echo "ERROR: Metric ml_model_accuracy not found in /metrics endpoint"
+            echo "Available metrics:"
+            curl -sS http://127.0.0.1:${OBSERVATION_PORT}/metrics | head -20
+            kill $PORT_FW_PID || true
+            cleanup_canary
+            exit 1
+          fi
+
+          # Export METRIC for Python subprocess
           export METRIC
-          # evaluate threshold using Python for robust float comparison
-          python - <<PY
-import os,sys
-try:
-    m=float(os.environ.get("METRIC","0"))
-except:
-    print("Cannot parse metric")
-    sys.exit(2)
-threshold=0.70
-print(f"ml_model_accuracy={m}, threshold={threshold}")
-if m >= threshold:
-    print("Metric threshold satisfied -> PROMOTE")
-    sys.exit(0)
-else:
-    print("Metric below threshold -> ROLLBACK")
-    sys.exit(3)
-PY
+
+          # Evaluate threshold using Python for robust float comparison
+          python - <<'PY'
+          import os,sys
+          try:
+              m=float(os.environ.get("METRIC","0"))
+          except Exception as e:
+              print(f"ERROR: Cannot parse metric: {e}")
+              sys.exit(2)
+          threshold=0.70
+          print(f"ml_model_accuracy={m}, threshold={threshold}")
+          if m >= threshold:
+              print("✓ Metric threshold satisfied -> READY TO PROMOTE")
+              sys.exit(0)
+          else:
+              print(f"✗ Metric below threshold ({m} < {threshold}) -> ROLLBACK")
+              sys.exit(3)
+          PY
           EVAL_EXIT_CODE=$?
+
+          # Cleanup port-forward
+          kill $PORT_FW_PID || true
+
+          # Handle evaluation result
           if [ $EVAL_EXIT_CODE -eq 3 ]; then
-            echo "Metric threshold not met. Uninstalling canary and failing gate."
-            export KUBECONFIG=$(pwd)/kubeconfig
-            helm uninstall $RELEASE_NAME-canary || true
+            echo "ERROR: Metric threshold not met. Rolling back canary."
+            cleanup_canary
             exit 1
           elif [ $EVAL_EXIT_CODE -ne 0 ]; then
+            echo "ERROR: Metric evaluation failed with exit code $EVAL_EXIT_CODE"
+            cleanup_canary
             exit $EVAL_EXIT_CODE
           fi
 
-      - name: Promote canary to stable
-        if: ${{ success() }}
+          echo "✓ All canary validation checks passed"
+
+  promote-to-production:
+    name: Promote canary to production
+    needs: deploy-canary
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: '1.29.0'
+
+      - name: Install Helm
         run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Configure kubeconfig
+        env:
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
+        run: |
+          set -e
+          echo "$KUBE_CONFIG_DATA" | base64 --decode > kubeconfig
           export KUBECONFIG=$(pwd)/kubeconfig
-          helm upgrade --install $RELEASE_NAME $CHART_PATH --set nameOverride=$RELEASE_NAME --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }}
-          helm uninstall $RELEASE_NAME-canary || true
+          kubectl version --client
+
+      - name: Promote canary to stable
+        run: |
+          set -e
+          export KUBECONFIG=$(pwd)/kubeconfig
+
+          echo "Promoting canary to stable..."
+          helm upgrade --install ${{ env.RELEASE_NAME }} ${{ env.CHART_PATH }} \
+            --set nameOverride=${{ env.RELEASE_NAME }} \
+            --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }} \
+            --timeout 5m \
+            --wait || {
+            echo "ERROR: Failed to promote to stable"
+            kubectl get pods -l app=${{ env.RELEASE_NAME }} || true
+            kubectl describe deployment/${{ env.RELEASE_NAME }} || true
+            exit 1
+          }
+
+          echo "Cleaning up canary release..."
+          helm uninstall ${{ env.RELEASE_NAME }}-canary || true
+
+          echo "✓ Promotion complete"
+
+      - name: Verify stable deployment
+        run: |
+          set -e
+          export KUBECONFIG=$(pwd)/kubeconfig
+
+          echo "Verifying stable deployment..."
+          kubectl wait --for=condition=available --timeout=120s deploy/${{ env.RELEASE_NAME }} || {
+            echo "ERROR: Stable deployment not ready"
+            kubectl get pods -l app=${{ env.RELEASE_NAME }}
+            kubectl describe deployment/${{ env.RELEASE_NAME }}
+            exit 1
+          }
+
+          echo "✓ Stable deployment verified"
+
+      - name: Create deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release**: ${{ env.RELEASE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ✅ Successfully promoted to production" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Rollback Command" >> $GITHUB_STEP_SUMMARY
+          echo "If needed, use the automated rollback workflow or run:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run rollback.yml" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

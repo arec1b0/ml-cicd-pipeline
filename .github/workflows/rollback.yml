@@ -1,0 +1,301 @@
+name: Rollback to Previous Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_tag:
+        description: "Target image tag to rollback to (leave empty for previous release)"
+        required: false
+        type: string
+      skip_verification:
+        description: "Skip health verification after rollback"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  CHART_PATH: infra/helm/ml-model-chart
+  RELEASE_NAME: ml-model
+  OBSERVATION_PORT: 18080
+
+jobs:
+  rollback:
+    name: Rollback deployment
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: '1.29.0'
+
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Configure kubeconfig
+        env:
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
+        run: |
+          set -e
+          if [ -z "$KUBE_CONFIG_DATA" ]; then
+            echo "ERROR: KUBE_CONFIG_DATA secret is not set"
+            exit 1
+          fi
+          echo "$KUBE_CONFIG_DATA" | base64 --decode > kubeconfig || {
+            echo "ERROR: Failed to decode KUBE_CONFIG_DATA"
+            exit 1
+          }
+          export KUBECONFIG=$(pwd)/kubeconfig
+          kubectl version --client
+
+      - name: Determine rollback target
+        id: rollback-target
+        run: |
+          set -e
+          export KUBECONFIG=$(pwd)/kubeconfig
+
+          if [ -n "${{ inputs.target_tag }}" ]; then
+            TARGET_TAG="${{ inputs.target_tag }}"
+            echo "Using user-specified target: $TARGET_TAG"
+          else
+            # Get current deployment image
+            CURRENT_IMAGE=$(kubectl get deployment/$RELEASE_NAME -o jsonpath='{.spec.template.spec.containers[0].image}')
+            echo "Current image: $CURRENT_IMAGE"
+
+            # List recent revisions
+            echo "Recent deployment revisions:"
+            kubectl rollout history deployment/$RELEASE_NAME || true
+
+            # Get previous revision
+            # Get current revision number
+            CURRENT_REV=$(kubectl get deployment/$RELEASE_NAME -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}')
+
+            # Get previous revision (current - 1)
+            PREV_REV=$((CURRENT_REV - 1))
+
+            if [ -z "$PREV_REV" ] || [ "$PREV_REV" -lt 1 ]; then
+              echo "ERROR: Cannot determine previous revision"
+              echo "Please specify target_tag manually"
+              exit 1
+            fi
+
+            # Extract image from previous revision
+            PREV_IMAGE=$(kubectl rollout history deployment/$RELEASE_NAME --revision=$PREV_REV -o json 2>/dev/null | \
+              jq -r '.spec.template.spec.containers[0].image' 2>/dev/null || echo "")
+
+            if [ -z "$PREV_IMAGE" ] || [ "$PREV_IMAGE" = "null" ]; then
+              echo "ERROR: Cannot determine previous image"
+              echo "Attempting to use Helm history..."
+
+              # Try getting from Helm history
+              PREV_RELEASE=$(helm history $RELEASE_NAME --max 2 -o json | jq -r '.[1].revision' 2>/dev/null || echo "")
+              if [ -n "$PREV_RELEASE" ] && [ "$PREV_RELEASE" != "null" ]; then
+                echo "Found previous Helm release: $PREV_RELEASE"
+                echo "Please check Helm values and specify target_tag manually"
+              fi
+              exit 1
+            fi
+
+            TARGET_TAG=$(echo "$PREV_IMAGE" | sed 's/.*://')
+            echo "Determined previous image tag: $TARGET_TAG"
+          fi
+
+          echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+          echo "TARGET_TAG=$TARGET_TAG" >> "$GITHUB_ENV"
+
+      - name: Verify target image exists
+        run: |
+          set -e
+
+          # Install crane for image verification
+          curl -sL "https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz" > crane.tar.gz
+          tar -xzf crane.tar.gz crane
+          chmod +x crane
+          sudo mv crane /usr/local/bin/
+
+          # Verify image exists
+          echo "Verifying target image exists..."
+          # Login to registry
+          echo "${{ secrets.REGISTRY_TOKEN }}" | crane auth login ${{ secrets.REGISTRY_HOST }} -u ${{ secrets.REGISTRY_USER }} --password-stdin
+          
+          # Then verify image
+          if ! crane digest "${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:$TARGET_TAG" 2>/dev/null; then
+            echo "ERROR: Target image does not exist: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:$TARGET_TAG"
+            echo "Available tags:"
+            crane ls "${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}" 2>/dev/null | tail -10 || echo "Failed to list tags"
+            exit 1
+          fi
+          echo "✓ Target image verified"
+
+      - name: Create pre-rollback snapshot
+        run: |
+          export KUBECONFIG=$(pwd)/kubeconfig
+
+          echo "## Pre-Rollback State" >> rollback-info.txt
+          echo "" >> rollback-info.txt
+          echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> rollback-info.txt
+          echo "" >> rollback-info.txt
+
+          echo "### Current Deployment" >> rollback-info.txt
+          kubectl get deployment/$RELEASE_NAME -o yaml >> rollback-info.txt || true
+          echo "" >> rollback-info.txt
+
+          echo "### Current Pods" >> rollback-info.txt
+          kubectl get pods -l app=$RELEASE_NAME >> rollback-info.txt || true
+          echo "" >> rollback-info.txt
+
+          echo "### Current ReplicaSets" >> rollback-info.txt
+          kubectl get rs -l app=$RELEASE_NAME >> rollback-info.txt || true
+
+          cat rollback-info.txt
+
+      - name: Remove canary deployment if exists
+        run: |
+          export KUBECONFIG=$(pwd)/kubeconfig
+
+          echo "Checking for canary deployment..."
+          if helm list | grep -q "$RELEASE_NAME-canary"; then
+            echo "Removing canary deployment..."
+            helm uninstall $RELEASE_NAME-canary || true
+          else
+            echo "No canary deployment found"
+          fi
+
+      - name: Perform rollback
+        run: |
+          set -e
+          export KUBECONFIG=$(pwd)/kubeconfig
+
+          echo "Rolling back to image tag: $TARGET_TAG"
+
+          # Perform rollback using Helm
+          helm upgrade --install $RELEASE_NAME $CHART_PATH \
+            --set nameOverride=$RELEASE_NAME \
+            --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }} \
+            --set image.tag=$TARGET_TAG \
+            --timeout 5m \
+            --wait || {
+            echo "ERROR: Rollback failed"
+            kubectl get pods -l app=$RELEASE_NAME
+            kubectl describe deployment/$RELEASE_NAME
+            exit 1
+          }
+
+          echo "✓ Rollback deployment initiated"
+
+      - name: Wait for rollback to complete
+        run: |
+          set -e
+          export KUBECONFIG=$(pwd)/kubeconfig
+
+          echo "Waiting for rollback to complete..."
+          if ! kubectl rollout status deployment/$RELEASE_NAME --timeout=5m; then
+            echo "ERROR: Rollback did not complete in time"
+            kubectl get pods -l app=$RELEASE_NAME
+            kubectl describe deployment/$RELEASE_NAME
+            kubectl logs -l app=$RELEASE_NAME --tail=50 || true
+            exit 1
+          fi
+
+          echo "✓ Rollback completed successfully"
+
+      - name: Verify rollback health
+        if: ${{ !inputs.skip_verification }}
+        run: |
+          set -e
+          export KUBECONFIG=$(pwd)/kubeconfig
+
+          echo "Starting health verification..."
+
+          # Port-forward to service
+          kubectl port-forward svc/$RELEASE_NAME-svc ${{ env.OBSERVATION_PORT }}:8000 --kubeconfig kubeconfig >/tmp/portfw.log 2>&1 &
+          PORT_FW_PID=$!
+
+          # Wait for port-forward
+          for i in {1..10}; do
+            if curl -sS http://127.0.0.1:${{ env.OBSERVATION_PORT }}/health/ >/dev/null 2>&1; then
+              echo "Port-forward ready"
+              break
+            fi
+            if [ $i -eq 10 ]; then
+              echo "WARNING: Port-forward failed, skipping health check"
+              kill $PORT_FW_PID || true
+              exit 0
+            fi
+            sleep 2
+          done
+
+          # Health check
+          if curl -sS --fail http://127.0.0.1:${{ env.OBSERVATION_PORT }}/health/; then
+            echo "✓ Health check passed"
+          else
+            echo "WARNING: Health check failed"
+            kill $PORT_FW_PID || true
+            exit 1
+          fi
+
+          # Prediction test
+          if PRED_RESPONSE=$(curl -sS --fail -X POST http://127.0.0.1:${{ env.OBSERVATION_PORT }}/predict/ \
+            -H "Content-Type: application/json" \
+            -d '{"features":[[5.1,3.5,1.4,0.2]]}'); then
+            echo "✓ Prediction test passed: $PRED_RESPONSE"
+          else
+            echo "WARNING: Prediction test failed"
+            kill $PORT_FW_PID || true
+            exit 1
+          fi
+
+          kill $PORT_FW_PID || true
+          echo "✓ All health checks passed"
+
+      - name: Upload rollback information
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-info-${{ github.run_id }}
+          path: rollback-info.txt
+          retention-days: 90
+
+      - name: Create rollback summary
+        if: always()
+        run: |
+          echo "## Rollback Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$ROLLBACK_STATUS" = "success" ]; then
+            echo "- **Status**: ✅ Rollback successful" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Status**: ❌ Rollback failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "- **Target Tag**: $TARGET_TAG" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release**: $RELEASE_NAME" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }}:$TARGET_TAG" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Post-Rollback State" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -l app=$RELEASE_NAME --kubeconfig kubeconfig 2>/dev/null || echo "Failed to get pods" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Verify application functionality" >> $GITHUB_STEP_SUMMARY
+          echo "2. Check metrics and logs" >> $GITHUB_STEP_SUMMARY
+          echo "3. Investigate root cause of issue that required rollback" >> $GITHUB_STEP_SUMMARY
+          echo "4. Fix issues and redeploy when ready" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Rollback failed. Manual intervention may be required."
+          echo "Check the logs and rollback-info artifact for details."
+          echo "You may need to perform a manual rollback using kubectl or Helm."

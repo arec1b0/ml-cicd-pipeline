@@ -52,9 +52,9 @@ jobs:
           poetry run mypy src
         shell: bash
 
-      - name: Run pytest
+      - name: Run pytest (parallel)
         run: |
-          poetry run pytest -q
+          poetry run pytest -n auto -q
         shell: bash
 
   security-scan:
@@ -90,6 +90,13 @@ jobs:
           safety check
         continue-on-error: false
 
+      - name: Run pip-audit (dependency vulnerability scanner)
+        run: |
+          pip install pip-audit
+          pip-audit --desc --format json --output pip-audit-report.json || true
+          pip-audit --desc
+        continue-on-error: false
+
       - name: Upload security reports
         if: always()
         uses: actions/upload-artifact@v3
@@ -98,4 +105,5 @@ jobs:
           path: |
             bandit-report.json
             safety-report.json
+            pip-audit-report.json
           retention-days: 30
