@@ -115,9 +115,18 @@ jobs:
       - name: Generate SLSA provenance attestation
         env:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          HEAD_COMMIT_TIMESTAMP: ${{ github.event.head_commit.timestamp }}
         run: |
           # Write key to file
           echo "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+
+          # Determine build start time - use head_commit.timestamp if available (push event),
+          # otherwise use current time (workflow_dispatch/repository_dispatch)
+          if [ -n "$HEAD_COMMIT_TIMESTAMP" ] && [ "$HEAD_COMMIT_TIMESTAMP" != "null" ]; then
+            BUILD_STARTED_ON="$HEAD_COMMIT_TIMESTAMP"
+          else
+            BUILD_STARTED_ON="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          fi
 
           # Generate provenance predicate
           cat > provenance.json <<EOF
@@ -136,7 +145,7 @@ jobs:
               }
             },
             "metadata": {
-              "buildStartedOn": "${{ github.event.head_commit.timestamp }}",
+              "buildStartedOn": "$BUILD_STARTED_ON",
               "buildFinishedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
               "completeness": {
                 "parameters": true,
