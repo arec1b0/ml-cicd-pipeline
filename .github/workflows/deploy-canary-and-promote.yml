@@ -230,20 +230,37 @@ jobs:
             exit 1
           }
 
-      - name: Ensure stable exists (install/update)
+      - name: Verify stable deployment exists
         run: |
           set -e
           export KUBECONFIG=$(pwd)/kubeconfig
-          helm upgrade --install $RELEASE_NAME $CHART_PATH \
-            --set nameOverride=$RELEASE_NAME \
-            --set image.repository=${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_REPO }},image.tag=${{ github.sha }} \
-            --timeout 5m \
-            --wait || {
-            echo "ERROR: Failed to ensure stable release exists"
-            kubectl get pods -l app=$RELEASE_NAME || true
-            kubectl describe deployment/$RELEASE_NAME || true
+
+          # Check if stable release exists
+          if ! helm list | grep -q "^$RELEASE_NAME\s"; then
+            echo "ERROR: Stable release '$RELEASE_NAME' does not exist"
+            echo "Canary deployments require an existing stable release to compare against."
+            echo "Please deploy the initial stable release first using a direct deployment workflow."
+            echo ""
+            echo "Available releases:"
+            helm list || true
             exit 1
-          }
+          fi
+
+          # Get current stable image
+          CURRENT_STABLE_IMAGE=$(kubectl get deployment/$RELEASE_NAME -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")
+          if [ -n "$CURRENT_STABLE_IMAGE" ]; then
+            echo "✓ Stable release exists with image: $CURRENT_STABLE_IMAGE"
+          else
+            echo "WARNING: Could not determine current stable image"
+          fi
+
+          # Verify stable deployment is healthy
+          if ! kubectl get deployment/$RELEASE_NAME >/dev/null 2>&1; then
+            echo "ERROR: Stable deployment does not exist"
+            exit 1
+          fi
+
+          echo "✓ Stable deployment verified - proceeding with canary"
 
       - name: Deploy canary release (low weight)
         run: |
