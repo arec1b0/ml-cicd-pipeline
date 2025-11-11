@@ -78,14 +78,26 @@ jobs:
             # Get current revision number
             CURRENT_REV=$(kubectl get deployment/$RELEASE_NAME -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}')
 
-            # Get previous revision (current - 1)
-            PREV_REV=$((CURRENT_REV - 1))
-
-            if [ -z "$PREV_REV" ] || [ "$PREV_REV" -lt 1 ]; then
-              echo "ERROR: Cannot determine previous revision"
+            # Validate current revision exists and is a valid number
+            if [ -z "$CURRENT_REV" ] || ! [ "$CURRENT_REV" -gt 0 ] 2>/dev/null; then
+              echo "ERROR: Cannot determine current revision number"
+              echo "Current revision: '$CURRENT_REV'"
               echo "Please specify target_tag manually"
               exit 1
             fi
+
+            # Get previous revision (current - 1)
+            PREV_REV=$((CURRENT_REV - 1))
+
+            # Validate previous revision is at least 1 (revision 0 is invalid for kubectl)
+            if [ "$PREV_REV" -lt 1 ]; then
+              echo "ERROR: No previous revision available (current revision is $CURRENT_REV)"
+              echo "This is the first deployment, cannot auto-rollback"
+              echo "Please specify target_tag manually"
+              exit 1
+            fi
+
+            echo "Current revision: $CURRENT_REV, previous revision: $PREV_REV"
 
             # Extract image from previous revision
             PREV_IMAGE=$(kubectl rollout history deployment/$RELEASE_NAME --revision=$PREV_REV -o json 2>/dev/null | \
@@ -266,11 +278,13 @@ jobs:
 
       - name: Create rollback summary
         if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
         run: |
           echo "## Rollback Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ "$ROLLBACK_STATUS" = "success" ]; then
+          if [ "$JOB_STATUS" = "success" ]; then
             echo "- **Status**: ✅ Rollback successful" >> $GITHUB_STEP_SUMMARY
           else
             echo "- **Status**: ❌ Rollback failed" >> $GITHUB_STEP_SUMMARY
