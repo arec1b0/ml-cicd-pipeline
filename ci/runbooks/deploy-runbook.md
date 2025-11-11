@@ -1,5 +1,16 @@
 # Deploy runbook (canary)
 
+## Overview
+
+This deployment workflow implements a comprehensive CI/CD pipeline with:
+
+- **Security Scanning**: Trivy container scanning for vulnerabilities
+- **Artifact Attestation**: Cosign signing and SLSA provenance attestation
+- **Canary Deployment**: Low-risk gradual rollout with metrics validation
+- **Environment Protection**: Manual approval required for production promotion
+- **Automated Rollback**: One-click rollback to previous releases
+- **Error Handling**: Comprehensive error detection and automatic cleanup
+
 ## Prerequisites
 
 ### Secret Management Setup
@@ -39,11 +50,20 @@ Before deploying, ensure secrets are properly configured:
 
 3. **Monitor Actions logs for**:
    - Image build success
-   - Helm upgrade success for stable and canary
+   - Security scan (Trivy) passed
+   - Image signing (Cosign) completed
+   - SLSA provenance attestation generated
+   - Canary deployment success
    - Smoke tests pass
+   - Metrics evaluation pass
    - Secret validation (if External Secrets Operator is enabled)
 
-4. **If smoke tests pass**, workflow promotes canary automatically.
+4. **Approve production promotion**:
+   - After canary validation passes, the workflow will pause and wait for manual approval
+   - Go to **Actions** tab and find the running workflow
+   - Review the canary validation results
+   - Click **Review deployments** and approve the `production` environment
+   - The workflow will then promote the canary to stable production
 
 5. **Refresh the running pods with the new model** (skip if `MODEL_AUTO_REFRESH_SECONDS` is non-zero):
    - **Retrieve the admin token**:
@@ -66,11 +86,48 @@ Before deploying, ensure secrets are properly configured:
        -v
      ```
 
-6. **If deployment fails**, workflow leaves stable unchanged and attempts to uninstall canary.
-
-7. **Manual rollback**:
+6. **Verify container image signature** (optional):
    ```bash
-   kubectl --kubeconfig <kubeconfig> get pods -l release=canary -n <namespace>
+   # Download public key from repository
+   curl -O https://raw.githubusercontent.com/your-org/your-repo/main/.github/cosign.pub
+
+   # Verify the signature
+   cosign verify --key cosign.pub <registry>/<repo>:<tag>
+
+   # Verify SLSA attestation
+   cosign verify-attestation --key cosign.pub --type slsaprovenance <registry>/<repo>:<tag>
+   ```
+
+7. **If deployment fails**, workflow leaves stable unchanged and attempts to uninstall canary.
+
+8. **Automated rollback**:
+   - Go to **Actions → Rollback to Previous Release**
+   - Click **Run workflow**
+   - Options:
+     - Leave `target_tag` empty to rollback to the previous release (automatic)
+     - Or specify a `target_tag` to rollback to a specific version
+     - Check `skip_verification` to skip health checks after rollback
+   - Click **Run workflow** to execute
+   - The rollback workflow will:
+     - Determine the target version (if not specified)
+     - Verify the target image exists
+     - Remove any canary deployments
+     - Rollback the stable deployment
+     - Run health checks to verify the rollback
+     - Generate a summary and upload rollback information
+
+9. **Manual rollback** (if automated workflow is unavailable):
+   ```bash
+   # List deployment history
+   kubectl --kubeconfig <kubeconfig> rollout history deployment/<release> -n <namespace>
+
+   # Rollback to previous revision
+   kubectl --kubeconfig <kubeconfig> rollout undo deployment/<release> -n <namespace>
+
+   # Or rollback to specific revision
+   kubectl --kubeconfig <kubeconfig> rollout undo deployment/<release> --to-revision=<revision> -n <namespace>
+
+   # Remove canary if exists
    kubectl --kubeconfig <kubeconfig> delete deploy <release>-canary -n <namespace>
    ```
 
