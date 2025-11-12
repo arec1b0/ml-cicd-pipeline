@@ -52,10 +52,20 @@ jobs:
           poetry run mypy src
         shell: bash
 
-      - name: Run pytest (parallel)
+      - name: Run pytest with coverage
         run: |
-          poetry run pytest -n auto -q
+          poetry run pytest
         shell: bash
+
+      - name: Upload coverage reports
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-reports
+          path: |
+            coverage.xml
+            htmlcov/
+          retention-days: 30
 
   security-scan:
     name: Security Scanning
