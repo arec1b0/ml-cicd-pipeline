@@ -133,9 +133,9 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
             X_train, y_train, predictions=train_preds
         )
         if reference_dataset_uri:
-            logger.info("Persisted training split to %s for drift monitoring.", reference_dataset_uri)
+            logger.info("Persisted training split for drift monitoring", extra={"uri": reference_dataset_uri})
     except Exception as exc:
-        logger.warning("Failed to persist reference dataset: %s", exc, exc_info=True)
+        logger.warning("Failed to persist reference dataset", extra={"error": str(exc), "error_type": type(exc).__name__}, exc_info=True)
 
     # Log to MLflow using resilient client
     with mlflow_client.start_run() as run:
@@ -169,11 +169,11 @@ def train(output_path: Optional[Path] = None, metrics_path: Optional[Path] = Non
                     artifact_path="model_onnx",
                     registered_model_name=registered_model_name
                 )
-                logger.info("Successfully converted and uploaded ONNX model to MLflow")
+                logger.info("Successfully converted and uploaded ONNX model to MLflow", extra={})
             except Exception as exc:
-                logger.warning("Failed to convert model to ONNX: %s", exc, exc_info=True)
+                logger.warning("Failed to convert model to ONNX", extra={"error": str(exc), "error_type": type(exc).__name__}, exc_info=True)
         else:
-            logger.info("Skipping ONNX conversion because skl2onnx is not installed")
+            logger.info("Skipping ONNX conversion because skl2onnx is not installed", extra={})
 
     # Also save locally for backward compatibility and testing
     saved_model_path: Optional[Path] = None

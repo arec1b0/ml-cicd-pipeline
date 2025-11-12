@@ -30,7 +30,68 @@ mypy = "^1.4"
 pre-commit = "^3.3"
 bandit = {extras = ["toml"], version = "^1.7"}
 safety = "^3.0"
+pylint = "^3.0"
 
 [build-system]
 requires = ["poetry-core>=1.6.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+    "onnxruntime.*",
+    "evidently.*",
+    "mlflow.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "ARG", # flake8-unused-arguments
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+    "PIE", # flake8-pie
+    "PT",  # flake8-pytest-style
+    "RET", # flake8-return
+    "RUF", # Ruff-specific rules
+    "BLE", # flake8-blind-except
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+    "ARG001", # unused function argument (common in callbacks)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # unused imports
+"tests/**/*.py" = ["ARG", "S101"]  # allow assert in tests
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]

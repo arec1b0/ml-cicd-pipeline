@@ -194,7 +194,7 @@ def _generate_shap_explanation(
     Raises:
         RuntimeError: If explanation generation fails with all methods.
     """
-    logger.debug("Generating SHAP explanation")
+    logger.debug("Generating SHAP explanation", extra={})
     
     # Try TreeExplainer for tree-based models (RandomForest, XGBoost, LightGBM)
     try:
@@ -221,13 +221,13 @@ def _generate_shap_explanation(
             
             base_value = float(explainer.expected_value) if hasattr(explainer, 'expected_value') else None
             
-            logger.info("SHAP TreeExplainer succeeded")
+            logger.info("SHAP TreeExplainer succeeded", extra={})
             return shap_vals_list, base_value, "tree_shap"
     
     except ImportError:
-        logger.warning("SHAP library not available, using fallback method")
+        logger.warning("SHAP library not available, using fallback method", extra={})
     except Exception as e:
-        logger.warning(f"TreeExplainer failed: {e}, trying fallback method")
+        logger.warning("TreeExplainer failed, trying fallback method", extra={"error": str(e), "error_type": type(e).__name__})
     
     # Fallback: Use simple feature importance from the model if available
     try:
@@ -239,13 +239,13 @@ def _generate_shap_explanation(
             # Scale by feature values to approximate SHAP-like values
             shap_vals_list = (importances * np.abs(features[0])).tolist()
             
-            logger.info("Using feature_importances_ as fallback explanation")
+            logger.info("Using feature_importances_ as fallback explanation", extra={})
             return shap_vals_list, None, "feature_importance"
     except Exception as e:
-        logger.warning(f"Feature importance fallback failed: {e}")
+        logger.warning("Feature importance fallback failed", extra={"error": str(e), "error_type": type(e).__name__})
     
     # Final fallback: Return zero SHAP values
-    logger.warning("All explanation methods failed, returning zero values")
+    logger.warning("All explanation methods failed, returning zero values", extra={})
     shap_vals_list = [0.0] * len(original_features)
     return shap_vals_list, None, "fallback_zero"
 

@@ -26,9 +26,12 @@ tracer = get_tracer(__name__)
 router = APIRouter(prefix="/predict", tags=["predict"])
 limiter = Limiter(key_func=get_remote_address)
 
-# Feature dimension limit - default to 4 for Iris dataset
+# Default feature dimension for Iris dataset
+DEFAULT_FEATURE_DIMENSION = 4
+
+# Feature dimension limit - default to DEFAULT_FEATURE_DIMENSION for Iris dataset
 # This can be overridden by environment variable or dynamically set from model metadata
-EXPECTED_FEATURE_DIMENSION = int(os.getenv("EXPECTED_FEATURE_DIMENSION", "4"))
+EXPECTED_FEATURE_DIMENSION = int(os.getenv("EXPECTED_FEATURE_DIMENSION", str(DEFAULT_FEATURE_DIMENSION)))
 
 # Input schema: list of numeric feature vectors.
 class PredictRequest(BaseModel):

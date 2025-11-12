@@ -13,9 +13,12 @@ import numpy as np
 
 try:
     import onnxruntime as ort
+    from onnxruntime.capi.onnxruntime_pybind11_state import InvalidArgument, NoSuchFile, RuntimeException
     ONNX_AVAILABLE = True
+    ONNX_EXCEPTIONS = (RuntimeException, InvalidArgument, NoSuchFile, OSError, RuntimeError)
 except ImportError:
     ONNX_AVAILABLE = False
+    ONNX_EXCEPTIONS = (OSError, RuntimeError)
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +54,11 @@ class ModelWrapper:
                 # Most sklearn models have n_features_in_ attribute after fitting
                 if hasattr(self._model, 'n_features_in_'):
                     return int(self._model.n_features_in_)
-        except Exception as exc:
-            logger.warning(f"Failed to extract input dimension from model: {exc}")
+        except (AttributeError, IndexError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Failed to extract input dimension from model",
+                extra={"error": str(exc), "error_type": type(exc).__name__, "is_onnx": self._is_onnx}
+            )
         return None
 
     def predict(self, features: Sequence[Sequence[float]]) -> list:
@@ -104,25 +110,31 @@ def load_model(path: Path) -> ModelWrapper:
                 try:
                     session = ort.InferenceSession(str(onnx_path))
                     input_name = session.get_inputs()[0].name
-                    logger.info(f"Loaded ONNX model from {onnx_path}")
+                    logger.info("Loaded ONNX model", extra={"path": str(onnx_path)})
                     return ModelWrapper(session, is_onnx=True, input_name=input_name)
-                except Exception as e:
-                    logger.warning(f"Failed to load ONNX model from {onnx_path}: {e}, falling back to sklearn")
+                except ONNX_EXCEPTIONS as e:
+                    logger.warning(
+                        "Failed to load ONNX model, falling back to sklearn",
+                        extra={"path": str(onnx_path), "error": str(e), "error_type": type(e).__name__}
+                    )
         
         # If path is already .onnx
         elif path_obj.suffix == '.onnx':
             try:
                 session = ort.InferenceSession(str(path_obj))
                 input_name = session.get_inputs()[0].name
-                logger.info(f"Loaded ONNX model from {path_obj}")
+                logger.info("Loaded ONNX model", extra={"path": str(path_obj)})
                 return ModelWrapper(session, is_onnx=True, input_name=input_name)
-            except Exception as e:
-                logger.warning(f"Failed to load ONNX model from {path_obj}: {e}, falling back to sklearn")
+            except ONNX_EXCEPTIONS as e:
+                logger.warning(
+                    "Failed to load ONNX model, falling back to sklearn",
+                    extra={"path": str(path_obj), "error": str(e), "error_type": type(e).__name__}
+                )
     
     # Fallback to sklearn/joblib
     try:
         model = joblib.load(path_obj)
-        logger.info(f"Loaded sklearn model from {path_obj}")
+        logger.info("Loaded sklearn model", extra={"path": str(path_obj)})
         return ModelWrapper(model, is_onnx=False)
-    except Exception as e:
+    except (FileNotFoundError, OSError, ValueError, KeyError, EOFError) as e:
         raise RuntimeError(f"Failed to load model from {path_obj}: {e}") from e

@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional
 
 import mlflow
 from mlflow import MlflowClient
+from mlflow.exceptions import MlflowException
 
 from src.models.infer import load_model, ModelWrapper
 from src.resilient_mlflow import ResilientMlflowClient, RetryConfig, CircuitBreakerConfig
@@ -191,7 +192,7 @@ class ModelManager:
         async with self._lock:
             descriptor = await self._resolve_descriptor()
             if descriptor is None:
-                logger.warning("No model descriptor resolved for source %s", self._source)
+                logger.warning("No model descriptor resolved for source", extra={"source": self._source})
                 return None
 
             if self._current and self._current.descriptor == descriptor and not force:
@@ -245,7 +246,7 @@ class ModelManager:
             )
         if self._source == "mlflow":
             return await asyncio.to_thread(self._resolve_mlflow_descriptor)
-        logger.error("Unsupported MODEL_SOURCE value: %s", self._source)
+        logger.error("Unsupported MODEL_SOURCE value", extra={"source": self._source})
         return None
 
     def _resolve_mlflow_descriptor(self) -> ModelDescriptor:
@@ -279,10 +280,10 @@ class ModelManager:
                     "server_version": server_version,
                 },
             )
-        except Exception as exc:
+        except (MlflowException, ConnectionError, TimeoutError, OSError) as exc:
             logger.warning(
                 "Failed to fetch MLflow server version",
-                extra={"error": str(exc)},
+                extra={"error": str(exc), "error_type": type(exc).__name__},
             )
 
         if self._mlflow_model_version:
@@ -355,7 +356,14 @@ class ModelManager:
             raise FileNotFoundError(f"Local model path not found: {path}")
 
         wrapper = await asyncio.to_thread(load_model, path)
-        metrics, accuracy = await asyncio.to_thread(self._load_metrics_from_directory, path.parent)
+        try:
+            metrics, accuracy = await asyncio.to_thread(self._load_metrics_from_directory, path.parent)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Failed to load metrics, continuing without metrics",
+                extra={"path": str(path.parent), "error": str(exc), "error_type": type(exc).__name__}
+            )
+            metrics, accuracy = None, None
 
         logger.info(
             "Loaded local model",
@@ -398,7 +406,14 @@ class ModelManager:
 
         model_file = await asyncio.to_thread(self._resolve_model_file, target_dir)
         wrapper = await asyncio.to_thread(load_model, model_file)
-        metrics, accuracy = await asyncio.to_thread(self._load_metrics_from_directory, target_dir)
+        try:
+            metrics, accuracy = await asyncio.to_thread(self._load_metrics_from_directory, target_dir)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Failed to load metrics, continuing without metrics",
+                extra={"path": str(target_dir), "error": str(exc), "error_type": type(exc).__name__}
+            )
+            metrics, accuracy = None, None
 
         logger.info(
             "Loaded MLflow model",
@@ -460,23 +475,46 @@ class ModelManager:
     def _load_metrics_from_directory(self, root: Path) -> tuple[Optional[Dict[str, Any]], Optional[float]]:
         """
         Load metrics.json if present and attempt to extract accuracy.
+        
+        Returns:
+            Tuple of (metrics dict, accuracy float). Both are None if metrics file doesn't exist.
+            
+        Raises:
+            OSError: If metrics file exists but cannot be read.
+            json.JSONDecodeError: If metrics file exists but contains invalid JSON.
         """
         metrics_path = self._find_metrics_file(root)
         if not metrics_path:
+            # Metrics file doesn't exist - this is fine, return None
             return None, None
+        
+        # Metrics file exists - try to load it, raise on error
         try:
             with open(metrics_path, "r", encoding="utf8") as handle:
                 metrics = json.load(handle)
-        except Exception as exc:  # noqa: BLE001 - log and continue
-            logger.warning("Failed to load metrics.json", extra={"path": str(metrics_path), "error": str(exc)})
-            return None, None
+        except (OSError, IOError) as exc:
+            logger.error(
+                "Failed to read metrics.json file",
+                extra={"path": str(metrics_path), "error": str(exc), "error_type": type(exc).__name__}
+            )
+            raise
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Invalid JSON in metrics.json file",
+                extra={"path": str(metrics_path), "error": str(exc), "error_type": type(exc).__name__}
+            )
+            raise
 
         accuracy = None
         if isinstance(metrics, dict) and "accuracy" in metrics:
             try:
                 accuracy = float(metrics["accuracy"])
-            except (TypeError, ValueError):
-                accuracy = None
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    "Failed to parse accuracy from metrics",
+                    extra={"path": str(metrics_path), "error": str(exc), "error_type": type(exc).__name__}
+                )
+                # Accuracy parsing failure is not critical, continue with None
         return metrics, accuracy
 
     def _find_metrics_file(self, root: Path) -> Optional[Path]:

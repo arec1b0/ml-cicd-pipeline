@@ -1,0 +1,212 @@
+{{-/*
+Named template for deployment pod spec.
+This template is used by both stable and canary deployments to avoid duplication.
+
+Usage:
+  {{- include "ml-model-chart.deployment.podSpec" (dict "root" . "release" "stable" "imageTag" .Values.image.tag) }}
+
+Parameters:
+  root: Root context (.)
+  release: Release name ("stable" or "canary")
+  imageTag: Image tag to use
+*/}}
+{{- define "ml-model-chart.deployment.podSpec" -}}
+{{- $root := .root }}
+{{- $release := .release }}
+{{- $imageTag := .imageTag }}
+      {{- if $root.Values.serviceAccount.create }}
+      serviceAccountName: {{ include "ml-model-chart.serviceAccountName" $root }}
+      {{- end }}
+      {{- $adminSecretName := "" }}
+      {{- if $root.Values.env.adminTokenSecretName }}
+        {{- $adminSecretName = $root.Values.env.adminTokenSecretName }}
+      {{- else if and $root.Values.externalSecrets.enabled $root.Values.externalSecrets.adminToken.secretName }}
+        {{- $adminSecretName = printf "%s-admin-token" (include "ml-model-chart.fullname" $root) }}
+      {{- end }}
+      {{- $mlflowPasswordSecretName := "" }}
+      {{- if $root.Values.env.mlflow.trackingPasswordSecretName }}
+        {{- $mlflowPasswordSecretName = $root.Values.env.mlflow.trackingPasswordSecretName }}
+      {{- else if and $root.Values.externalSecrets.enabled $root.Values.externalSecrets.mlflowCredentials.secretName }}
+        {{- $mlflowPasswordSecretName = printf "%s-mlflow-credentials" (include "ml-model-chart.fullname" $root) }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: model-prefetch
+          image: "{{ $root.Values.image.repository }}:{{ $imageTag }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: MODEL_SOURCE
+              value: {{ $root.Values.env.modelSource | default "mlflow" | quote }}
+            - name: MODEL_CACHE_DIR
+              value: {{ $root.Values.env.modelCacheDir | default "/var/cache/ml-model" | quote }}
+            {{- with $root.Values.env.mlflow }}
+            {{- if .modelName }}
+            - name: MLFLOW_MODEL_NAME
+              value: {{ .modelName | quote }}
+            {{- end }}
+            {{- if .modelStage }}
+            - name: MLFLOW_MODEL_STAGE
+              value: {{ .modelStage | quote }}
+            {{- end }}
+            {{- if .modelVersion }}
+            - name: MLFLOW_MODEL_VERSION
+              value: {{ .modelVersion | quote }}
+            {{- end }}
+            {{- if .trackingUri }}
+            - name: MLFLOW_TRACKING_URI
+              value: {{ .trackingUri | quote }}
+            {{- end }}
+            {{- if .trackingUsername }}
+            - name: MLFLOW_TRACKING_USERNAME
+              value: {{ .trackingUsername | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $mlflowPasswordSecretName }}
+            - name: MLFLOW_TRACKING_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mlflowPasswordSecretName | quote }}
+                  key: {{ $root.Values.env.mlflow.trackingPasswordSecretKey | default "password" | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ $root.Values.env.modelCacheDir | default "/var/cache/ml-model" | quote }}
+          command:
+            - python
+            - -c
+            - |
+              from src.model.manager import ModelManager
+              import os
+              print("Pre-fetching model to cache...")
+              manager = ModelManager()
+              model = manager.load_model()
+              print(f"Model pre-fetched successfully: {type(model)}")
+      containers:
+        - name: api
+          image: "{{ $root.Values.image.repository }}:{{ $imageTag }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: {{ $root.Values.service.port }}
+          env:
+            - name: LOG_LEVEL
+              value: {{ $root.Values.env.logLevel | default "INFO" | quote }}
+            - name: LOG_FORMAT
+              value: {{ $root.Values.env.logFormat | default "json" | quote }}
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MODEL_SOURCE
+              value: {{ $root.Values.env.modelSource | default "mlflow" | quote }}
+            {{- if $root.Values.env.modelPath }}
+            - name: MODEL_PATH
+              value: {{ $root.Values.env.modelPath | quote }}
+            {{- end }}
+            - name: MODEL_CACHE_DIR
+              value: {{ $root.Values.env.modelCacheDir | default "/var/cache/ml-model" | quote }}
+            - name: MODEL_AUTO_REFRESH_SECONDS
+              value: {{ $root.Values.env.modelAutoRefreshSeconds | default 0 | quote }}
+            {{- if $root.Values.env.expectedFeatureDimension }}
+            - name: EXPECTED_FEATURE_DIMENSION
+              value: {{ $root.Values.env.expectedFeatureDimension | quote }}
+            {{- end }}
+            {{- with $root.Values.env.mlflow }}
+            {{- if .modelName }}
+            - name: MLFLOW_MODEL_NAME
+              value: {{ .modelName | quote }}
+            {{- end }}
+            {{- if .modelStage }}
+            - name: MLFLOW_MODEL_STAGE
+              value: {{ .modelStage | quote }}
+            {{- end }}
+            {{- if .modelVersion }}
+            - name: MLFLOW_MODEL_VERSION
+              value: {{ .modelVersion | quote }}
+            {{- end }}
+            {{- if .trackingUri }}
+            - name: MLFLOW_TRACKING_URI
+              value: {{ .trackingUri | quote }}
+            {{- end }}
+            {{- if .trackingUsername }}
+            - name: MLFLOW_TRACKING_USERNAME
+              value: {{ .trackingUsername | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $mlflowPasswordSecretName }}
+            - name: MLFLOW_TRACKING_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mlflowPasswordSecretName | quote }}
+                  key: {{ $root.Values.env.mlflow.trackingPasswordSecretKey | default "password" | quote }}
+            {{- end }}
+            - name: ADMIN_TOKEN_HEADER
+              value: {{ $root.Values.env.adminTokenHeader | default "X-Admin-Token" | quote }}
+            {{- if $adminSecretName }}
+            - name: ADMIN_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $adminSecretName | quote }}
+                  key: {{ $root.Values.env.adminTokenSecretKey | default "token" | quote }}
+            {{- end }}
+            {{- if $root.Values.env.otelExporterOtlpEndpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ $root.Values.env.otelExporterOtlpEndpoint | quote }}
+            {{- end }}
+            {{- if $root.Values.env.otelServiceName }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ $root.Values.env.otelServiceName | quote }}
+            {{- end }}
+            {{- if $root.Values.env.otelResourceAttributes }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: {{ $root.Values.env.otelResourceAttributes | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ $root.Values.env.modelCacheDir | default "/var/cache/ml-model" | quote }}
+          readinessProbe:
+            httpGet:
+              path: /health/
+              port: {{ $root.Values.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/
+              port: {{ $root.Values.service.port }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          {{- if $root.Values.resources }}
+          resources:
+            {{- toYaml $root.Values.resources | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: model-cache
+          emptyDir: {}
+{{- end }}
+

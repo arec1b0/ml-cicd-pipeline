@@ -43,6 +43,7 @@ from src.utils.telemetry import PrometheusMiddleware, MODEL_ACCURACY
 from src.utils.logging import setup_logging
 from src.app.api.middleware.correlation import CorrelationIDMiddleware
 from src.utils.tracing import initialize_tracing, instrument_fastapi
+from mlflow.exceptions import MlflowException
 
 def create_app() -> FastAPI:
     """Initializes and configures the FastAPI application.
@@ -243,13 +244,13 @@ def create_app() -> FastAPI:
         log = logging.getLogger(__name__)
         try:
             state = await manager.reload(force=force)
-        except Exception as exc:  # noqa: BLE001 - log and surface
+        except (RuntimeError, FileNotFoundError, MlflowException, ConnectionError, OSError) as exc:
             app.state.mlflow_connectivity = {
                 "status": "error",
                 "error": str(exc),
                 "verified_at": datetime.now(tz=timezone.utc).isoformat(),
             }
-            log.exception("Model reload failed", extra={"error": str(exc)})
+            log.exception("Model reload failed", extra={"error": str(exc), "error_type": type(exc).__name__})
             raise
         if state:
             _apply_model_state(state)
@@ -280,8 +281,8 @@ def create_app() -> FastAPI:
                     state = await manager.refresh_if_needed()
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:  # noqa: BLE001 - log and continue
-                    log.exception("Auto-refresh tick failed", extra={"error": str(exc)})
+                except (RuntimeError, FileNotFoundError, MlflowException, ConnectionError, OSError) as exc:
+                    log.exception("Auto-refresh tick failed", extra={"error": str(exc), "error_type": type(exc).__name__})
                     continue
                 if state:
                     _apply_model_state(state)
@@ -314,8 +315,8 @@ def create_app() -> FastAPI:
         log = logging.getLogger(__name__)
         try:
             await reload_and_apply(force=True)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("Startup model load failed", extra={"error": str(exc)})
+        except (RuntimeError, FileNotFoundError, MlflowException, ConnectionError, OSError) as exc:
+            log.exception("Startup model load failed", extra={"error": str(exc), "error_type": type(exc).__name__})
             _clear_state()
             app.state.mlflow_connectivity = {
                 "status": "error",

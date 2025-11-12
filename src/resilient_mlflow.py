@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, TypeVar, ParamSpec
 
 import mlflow
 from mlflow import MlflowClient
@@ -21,6 +21,7 @@ from mlflow.exceptions import MlflowException
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+P = ParamSpec("P")
 
 
 class CircuitState(Enum):
@@ -108,7 +109,7 @@ class CircuitBreaker:
         if self.state == CircuitState.OPEN:
             if self._should_attempt_reset():
                 self.state = CircuitState.HALF_OPEN
-                logger.info("Circuit breaker entering HALF_OPEN state")
+                logger.info("Circuit breaker entering HALF_OPEN state", extra={})
             else:
                 raise MlflowException(
                     f"Circuit breaker is OPEN. MLflow is unavailable. "
@@ -119,7 +120,7 @@ class CircuitBreaker:
             result = func()
             self._on_success()
             return result
-        except Exception as e:
+        except (MlflowException, ConnectionError, TimeoutError, OSError, RuntimeError) as e:
             self._on_failure()
             raise e
 
@@ -138,7 +139,7 @@ class CircuitBreaker:
                 self.state = CircuitState.CLOSED
                 self.failure_count = 0
                 self.success_count = 0
-                logger.info("Circuit breaker CLOSED after successful recovery")
+                logger.info("Circuit breaker CLOSED after successful recovery", extra={})
         else:
             self.failure_count = 0
 
@@ -150,11 +151,12 @@ class CircuitBreaker:
         if self.state == CircuitState.HALF_OPEN:
             self.state = CircuitState.OPEN
             self.success_count = 0
-            logger.warning("Circuit breaker reopened after failure in HALF_OPEN state")
+            logger.warning("Circuit breaker reopened after failure in HALF_OPEN state", extra={})
         elif self.failure_count >= self.config.failure_threshold:
             self.state = CircuitState.OPEN
             logger.error(
-                f"Circuit breaker OPENED after {self.failure_count} failures"
+                "Circuit breaker OPENED after failures",
+                extra={"failure_count": self.failure_count}
             )
 
     def reset(self):
@@ -163,9 +165,9 @@ class CircuitBreaker:
         self.failure_count = 0
         self.success_count = 0
         self.last_failure_time = None
-        logger.info("Circuit breaker manually reset to CLOSED")
+        logger.info("Circuit breaker manually reset to CLOSED", extra={})
 
-    def get_state(self) -> dict:
+    def get_state(self) -> dict[str, Any]:
         """Get current circuit breaker state."""
         return {
             "state": self.state.value,
@@ -180,7 +182,7 @@ class CircuitBreaker:
 def retry_with_backoff(
     retry_config: RetryConfig,
     circuit_breaker: Optional[CircuitBreaker] = None,
-):
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """A decorator that adds retry logic with exponential backoff to a function.
 
     This decorator can be used to automatically retry a function that may fail
@@ -194,9 +196,9 @@ def retry_with_backoff(
     Returns:
         A decorated function with retry logic.
     """
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             attempt = 0
             last_exception = None
 
@@ -213,7 +215,8 @@ def retry_with_backoff(
 
                     if attempt >= retry_config.max_attempts:
                         logger.error(
-                            f"Failed after {attempt} attempts: {func.__name__}",
+                            "Failed after maximum attempts",
+                            extra={"attempts": attempt, "function": func.__name__},
                             exc_info=True,
                         )
                         raise
@@ -225,12 +228,21 @@ def retry_with_backoff(
                     )
 
                     logger.warning(
-                        f"Attempt {attempt}/{retry_config.max_attempts} failed for "
-                        f"{func.__name__}: {e}. Retrying in {delay:.2f}s..."
+                        "Retry attempt failed, retrying",
+                        extra={
+                            "attempt": attempt,
+                            "max_attempts": retry_config.max_attempts,
+                            "function": func.__name__,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                            "delay_seconds": delay
+                        }
                     )
                     time.sleep(delay)
 
-            raise last_exception
+            if last_exception is not None:
+                raise last_exception
+            raise RuntimeError("Retry loop completed without exception")
 
         return wrapper
 
@@ -289,7 +301,7 @@ class ResilientMlflowClient:
         return self._client
 
     @retry_with_backoff(RetryConfig())
-    def set_tracking_uri(self, uri: str):
+    def set_tracking_uri(self, uri: str) -> None:
         """Set MLflow tracking URI with retry."""
         mlflow.set_tracking_uri(uri)
         self.tracking_uri = uri
@@ -301,7 +313,7 @@ class ResilientMlflowClient:
         return mlflow.set_experiment(experiment_name)
 
     @contextmanager
-    def start_run(self, **kwargs):
+    def start_run(self, **kwargs: Any):
         """
         Start MLflow run with retry logic.
 
@@ -313,7 +325,7 @@ class ResilientMlflowClient:
         """
 
         @retry_with_backoff(self.retry_config, self.circuit_breaker)
-        def _start_run():
+        def _start_run() -> Any:
             return mlflow.start_run(**kwargs)
 
         run = _start_run()
@@ -322,36 +334,36 @@ class ResilientMlflowClient:
         finally:
             try:
                 mlflow.end_run()
-            except Exception as e:
-                logger.warning(f"Error ending run: {e}")
+            except (MlflowException, RuntimeError) as e:
+                logger.warning("Error ending run", extra={"error": str(e), "error_type": type(e).__name__})
 
     @retry_with_backoff(RetryConfig())
-    def log_param(self, key: str, value: Any):
+    def log_param(self, key: str, value: Any) -> None:
         """Log parameter with retry."""
-        return mlflow.log_param(key, value)
+        mlflow.log_param(key, value)
 
     @retry_with_backoff(RetryConfig())
-    def log_params(self, params: dict):
+    def log_params(self, params: dict[str, Any]) -> None:
         """Log multiple parameters with retry."""
-        return mlflow.log_params(params)
+        mlflow.log_params(params)
 
     @retry_with_backoff(RetryConfig())
-    def log_metric(self, key: str, value: float, step: Optional[int] = None):
+    def log_metric(self, key: str, value: float, step: Optional[int] = None) -> None:
         """Log metric with retry."""
-        return mlflow.log_metric(key, value, step=step)
+        mlflow.log_metric(key, value, step=step)
 
     @retry_with_backoff(RetryConfig())
-    def log_metrics(self, metrics: dict, step: Optional[int] = None):
+    def log_metrics(self, metrics: dict[str, float], step: Optional[int] = None) -> None:
         """Log multiple metrics with retry."""
-        return mlflow.log_metrics(metrics, step=step)
+        mlflow.log_metrics(metrics, step=step)
 
     @retry_with_backoff(RetryConfig())
-    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None):
+    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None) -> None:
         """Log artifact with retry."""
-        return mlflow.log_artifact(local_path, artifact_path)
+        mlflow.log_artifact(local_path, artifact_path)
 
     @retry_with_backoff(RetryConfig())
-    def log_model(self, model, artifact_path: str, **kwargs):
+    def log_model(self, model: Any, artifact_path: str, **kwargs: Any) -> Any:
         """Log model with retry."""
         # Determine model flavor and use appropriate log function
         if hasattr(mlflow, "sklearn") and "sk_model" in kwargs:
@@ -367,33 +379,33 @@ class ResilientMlflowClient:
             return mlflow.log_model(model, artifact_path, **kwargs)
 
     @retry_with_backoff(RetryConfig())
-    def get_model_version(self, name: str, version: str):
+    def get_model_version(self, name: str, version: str) -> Any:
         """Get model version with retry."""
         return self.client.get_model_version(name, version)
 
     @retry_with_backoff(RetryConfig())
-    def get_latest_versions(self, name: str, stages: Optional[list[str]] = None):
+    def get_latest_versions(self, name: str, stages: Optional[list[str]] = None) -> list[Any]:
         """Get latest model versions with retry."""
         return self.client.get_latest_versions(name, stages=stages)
 
     @retry_with_backoff(RetryConfig())
-    def download_artifacts(self, artifact_uri: str, dst_path: str):
+    def download_artifacts(self, artifact_uri: str, dst_path: str) -> str:
         """Download artifacts with retry."""
         return mlflow.artifacts.download_artifacts(
             artifact_uri=artifact_uri, dst_path=dst_path
         )
 
     @retry_with_backoff(RetryConfig())
-    def search_runs(self, experiment_ids: list[str], **kwargs):
+    def search_runs(self, experiment_ids: list[str], **kwargs: Any) -> list[Any]:
         """Search runs with retry."""
         return self.client.search_runs(experiment_ids, **kwargs)
 
     @retry_with_backoff(RetryConfig())
-    def get_run(self, run_id: str):
+    def get_run(self, run_id: str) -> Any:
         """Get run with retry."""
         return self.client.get_run(run_id)
 
-    def get_circuit_breaker_state(self) -> dict:
+    def get_circuit_breaker_state(self) -> dict[str, Any]:
         """Returns the current state of the circuit breaker.
 
         Returns:
@@ -401,7 +413,7 @@ class ResilientMlflowClient:
         """
         return self.circuit_breaker.get_state()
 
-    def reset_circuit_breaker(self):
+    def reset_circuit_breaker(self) -> None:
         """Manually reset circuit breaker."""
         self.circuit_breaker.reset()
 
@@ -423,10 +435,11 @@ class ResilientMlflowClient:
                 "server_version": version,
                 "circuit_breaker": self.get_circuit_breaker_state(),
             }
-        except Exception as e:
+        except (MlflowException, ConnectionError, TimeoutError, OSError) as e:
             return {
                 "status": "unhealthy",
                 "error": str(e),
+                "error_type": type(e).__name__,
                 "circuit_breaker": self.get_circuit_breaker_state(),
             }
 

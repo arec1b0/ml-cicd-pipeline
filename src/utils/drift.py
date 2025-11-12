@@ -57,7 +57,10 @@ def load_dataset_from_uri(uri: str) -> pd.DataFrame:
         FileNotFoundError: If the specified local file does not exist.
     """
     resolved = _normalise_destination(uri)
-    if resolved.startswith(("s3://", "gs://", "az://", "azure://")) or "://" in resolved:
+    if (
+        resolved.startswith(("s3://", "gs://", "az://", "azure://"))
+        or "://" in resolved
+    ):
         return pd.read_csv(resolved)
 
     path = Path(resolved)
@@ -93,7 +96,10 @@ def persist_reference_dataset(
     """
     destination = destination or os.getenv(REFERENCE_DATASET_URI_ENV)
     if not destination:
-        _logger.debug("Skipping reference dataset persistence; REFERENCE_DATASET_URI not set.")
+        _logger.debug(
+            "Skipping reference dataset persistence; REFERENCE_DATASET_URI not set",
+            extra={},
+        )
         return None
 
     try:
@@ -102,8 +108,8 @@ def persist_reference_dataset(
             max_rows = int(limit_env)
     except ValueError:
         _logger.warning(
-            "Invalid REFERENCE_DATASET_MAX_ROWS value: %s. Falling back to unlimited rows.",
-            os.getenv(REFERENCE_DATASET_MAX_ROWS_ENV),
+            "Invalid REFERENCE_DATASET_MAX_ROWS value, falling back to unlimited rows",
+            extra={"value": os.getenv(REFERENCE_DATASET_MAX_ROWS_ENV)},
         )
         max_rows = max_rows or None
 
@@ -121,7 +127,10 @@ def persist_reference_dataset(
         df = df.head(max_rows)
 
     resolved_destination = _normalise_destination(destination)
-    if resolved_destination.startswith(("s3://", "gs://", "az://", "azure://")) or "://" in resolved_destination:
+    if (
+        resolved_destination.startswith(("s3://", "gs://", "az://", "azure://"))
+        or "://" in resolved_destination
+    ):
         # pandas uses fsspec under the hood for cloud URIs when the relevant
         # filesystem drivers are installed (e.g., s3fs, gcsfs).
         df.to_csv(resolved_destination, index=False)
@@ -130,7 +139,10 @@ def persist_reference_dataset(
         path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(path, index=False)
 
-    _logger.info("Persisted reference dataset to %s (rows=%s)", destination, len(df))
+    _logger.info(
+        "Persisted reference dataset",
+        extra={"destination": destination, "rows": len(df)},
+    )
     return destination
 
 
@@ -155,15 +167,19 @@ def emit_prediction_log(
         The unique ID of the generated event.
     """
     event_id = str(uuid4())
-    payload: dict[str, object] = {
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    # Build structured log entry with all prediction data for Loki ingestion
+    log_extra: dict[str, object] = {
         "event": "prediction",
         "event_id": event_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": timestamp,
         "features": features,
         "predictions": predictions,
     }
     if metadata:
-        payload["metadata"] = dict(metadata)
+        log_extra["metadata"] = dict(metadata)
 
-    _logger.info(json.dumps(payload, default=str))
+    # Log with full payload in extra for structured JSON logging (Loki-compatible)
+    _logger.info("Prediction log emitted", extra=log_extra)
     return event_id

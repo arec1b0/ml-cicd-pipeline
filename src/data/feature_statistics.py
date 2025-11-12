@@ -46,7 +46,7 @@ def compute_feature_statistics(data_path: str) -> Dict[str, Dict[str, Any]]:
     
     # Return cached statistics if available
     if data_path_str in _STATS_CACHE:
-        logger.debug(f"Using cached feature statistics for {data_path_str}")
+        logger.debug("Using cached feature statistics", extra={"data_path": data_path_str})
         return _STATS_CACHE[data_path_str]
     
     # Check if file exists
@@ -57,7 +57,7 @@ def compute_feature_statistics(data_path: str) -> Dict[str, Dict[str, Any]]:
     try:
         # Read CSV file
         df = pd.read_csv(path)
-        logger.info(f"Loaded data with shape {df.shape} from {data_path}")
+        logger.info("Loaded data", extra={"data_path": data_path_str, "shape": list(df.shape)})
         
         # Exclude target column (common names: target, label, y, class)
         target_names = {'target', 'label', 'y', 'class', 'class_label'}
@@ -82,8 +82,13 @@ def compute_feature_statistics(data_path: str) -> Dict[str, Dict[str, Any]]:
                 }
                 
                 logger.debug(
-                    f"Feature {col}: min={stats[col]['min']:.3f}, "
-                    f"max={stats[col]['max']:.3f}, mean={stats[col]['mean']:.3f}"
+                    "Feature statistics computed",
+                    extra={
+                        "feature": col,
+                        "min": stats[col]['min'],
+                        "max": stats[col]['max'],
+                        "mean": stats[col]['mean']
+                    }
                 )
         
         if not stats:
@@ -91,12 +96,12 @@ def compute_feature_statistics(data_path: str) -> Dict[str, Dict[str, Any]]:
         
         # Cache the statistics
         _STATS_CACHE[data_path_str] = stats
-        logger.info(f"Computed statistics for {len(stats)} features")
+        logger.info("Computed statistics", extra={"feature_count": len(stats), "data_path": data_path_str})
         
         return stats
     
     except Exception as exc:
-        logger.error(f"Failed to compute feature statistics: {exc}")
+        logger.error("Failed to compute feature statistics", extra={"data_path": data_path_str, "error": str(exc), "error_type": type(exc).__name__})
         raise
 
 
@@ -187,7 +192,7 @@ def clear_statistics_cache() -> None:
     """
     global _STATS_CACHE
     _STATS_CACHE.clear()
-    logger.info("Cleared feature statistics cache")
+    logger.info("Cleared feature statistics cache", extra={})
 
 
 # Initialize statistics on module load
@@ -198,7 +203,7 @@ def _initialize_defaults():
         if train_path.exists():
             compute_feature_statistics(str(train_path))
     except Exception as exc:
-        logger.warning(f"Failed to initialize default statistics: {exc}")
+        logger.warning("Failed to initialize default statistics", extra={"error": str(exc), "error_type": type(exc).__name__})
 
 
 # Initialize on import

@@ -152,7 +152,7 @@ class DriftMonitor:
             ValueError: If the reference dataset is empty or does not contain
                         any feature columns.
         """
-        logger.info("Loading reference dataset from %s", self.settings.reference_dataset_uri)
+        logger.info("Loading reference dataset", extra={"uri": self.settings.reference_dataset_uri})
         df = load_dataset_from_uri(self.settings.reference_dataset_uri)
         if self.settings.max_rows is not None:
             df = df.head(self.settings.max_rows)
@@ -178,10 +178,12 @@ class DriftMonitor:
             mapping.target = self.target_column
         self.column_mapping = mapping
         logger.info(
-            "Reference dataset ready with %d rows, %d features. Prediction column: %s",
-            len(self.reference_df),
-            len(self.feature_columns),
-            self.prediction_column,
+            "Reference dataset ready",
+            extra={
+                "rows": len(self.reference_df),
+                "feature_count": len(self.feature_columns),
+                "prediction_column": self.prediction_column,
+            }
         )
 
     async def run(self) -> None:
@@ -195,7 +197,7 @@ class DriftMonitor:
             try:
                 await self.evaluate_once()
             except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception("Drift evaluation failed: %s", exc)
+                logger.exception("Drift evaluation failed", extra={"error": str(exc), "error_type": type(exc).__name__})
             try:
                 await asyncio.wait_for(
                     self._shutdown_event.wait(),
@@ -391,7 +393,7 @@ class DriftMonitor:
                 try:
                     payload = json.loads(line)
                 except json.JSONDecodeError:
-                    logger.debug("Skipping non-JSON log line: %s", line)
+                    logger.debug("Skipping non-JSON log line", extra={"line": line})
                     continue
                 events.append(payload)
         return events
@@ -447,7 +449,7 @@ class DriftMonitor:
         try:
             sanitized_query = self._sanitize_loki_query(self.settings.loki_query)
         except ValueError as exc:
-            logger.error("Loki query validation failed: %s", exc)
+            logger.error("Loki query validation failed", extra={"error": str(exc), "error_type": type(exc).__name__})
             return []
 
         end = datetime.now(timezone.utc)
@@ -470,7 +472,7 @@ class DriftMonitor:
                 try:
                     parsed = json.loads(line)
                 except json.JSONDecodeError:
-                    logger.debug("Skipping non-JSON Loki log line: %s", line)
+                    logger.debug("Skipping non-JSON Loki log line", extra={"line": line})
                     continue
                 # Loki wraps log line as string, but our logger emits JSON string already.
                 if isinstance(parsed, str):

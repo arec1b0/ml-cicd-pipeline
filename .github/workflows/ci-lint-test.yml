@@ -44,12 +44,17 @@ jobs:
 
       - name: Run ruff (lint)
         run: |
-          poetry run ruff src tests
+          poetry run ruff check --select ALL src tests
         shell: bash
 
-      - name: Run mypy (type checks)
+      - name: Run mypy (type checks - strict mode)
         run: |
-          poetry run mypy src
+          poetry run mypy --strict src
+        shell: bash
+
+      - name: Run pylint (code quality)
+        run: |
+          poetry run pylint src --exit-zero || true
         shell: bash
 
       - name: Run pytest (parallel)
