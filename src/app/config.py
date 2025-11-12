@@ -1,105 +1,357 @@
 """
 Configuration loader for the inference service.
-Reads configuration from environment variables.
+Uses Pydantic BaseSettings for validation and type safety.
 """
 
 from __future__ import annotations
-import os
+
+import logging
+from enum import Enum
 from pathlib import Path
+from typing import Optional
 
-def _get_int(name: str, default: int, max_value: int | None = None) -> int:
+from pydantic import Field, ValidationError, field_validator, model_validator
+from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
+
+
+class ModelSource(str, Enum):
+    """Valid model source types."""
+
+    MLFLOW = "mlflow"
+    LOCAL = "local"
+
+
+class AppConfig(BaseSettings):
+    """Application configuration with validation.
+
+    All configuration is loaded from environment variables with sensible defaults.
+    Validation ensures MODEL_SOURCE-specific requirements are met.
     """
-    Read environment variable as int with fallback and optional max value validation.
 
-    Args:
-        name: The name of the environment variable.
-        default: The default value to use if the environment variable is not set.
-        max_value: The maximum allowed value (inclusive). If exceeded, raises ValueError.
+    # Model source configuration
+    model_source: ModelSource = Field(
+        default=ModelSource.MLFLOW,
+        env="MODEL_SOURCE",
+        description="Source of the model: 'mlflow' or 'local'",
+    )
+
+    # Base directory for model paths (configurable for different container structures)
+    model_base_dir: Path = Field(
+        default=Path("/app"),
+        env="MODEL_BASE_DIR",
+        description="Base directory for model paths",
+    )
+
+    # Model path configuration
+    model_path: Optional[Path] = Field(
+        default=None,
+        env="MODEL_PATH",
+        description="Path to local model file (required if MODEL_SOURCE=local)",
+    )
+
+    # Model cache directory
+    model_cache_dir: Path = Field(
+        default=Path("/var/cache/ml-model"),
+        env="MODEL_CACHE_DIR",
+        description="Directory to cache downloaded models",
+    )
+
+    # Model auto-refresh configuration
+    model_auto_refresh_seconds: int = Field(
+        default=300,
+        ge=0,
+        le=3600,
+        env="MODEL_AUTO_REFRESH_SECONDS",
+        description="Interval in seconds for auto-refreshing the model (0 disables, max 3600)",
+    )
+
+    # Batch size limits
+    max_batch_size: int = Field(
+        default=1000,
+        ge=1,
+        le=10000,
+        env="MAX_BATCH_SIZE",
+        description="Maximum batch size for inference requests (1-10000)",
+    )
+
+    # Expected feature dimension (default for Iris dataset)
+    expected_feature_dimension: int = Field(
+        default=4,
+        ge=1,
+        env="EXPECTED_FEATURE_DIMENSION",
+        description="Expected number of input features (default: 4 for Iris dataset)",
+    )
+
+    # Logging configuration
+    log_level: str = Field(
+        default="INFO",
+        env="LOG_LEVEL",
+        description="Logging level (e.g., 'INFO', 'DEBUG')",
+    )
+
+    log_format: str = Field(
+        default="json",
+        env="LOG_FORMAT",
+        description="Log format: 'json' or 'text'",
+    )
+
+    # Correlation ID configuration
+    correlation_id_header: str = Field(
+        default="X-Correlation-ID",
+        env="CORRELATION_ID_HEADER",
+        description="HTTP header for correlation IDs",
+    )
+
+    # OpenTelemetry configuration
+    otel_exporter_otlp_endpoint: Optional[str] = Field(
+        default=None,
+        env="OTEL_EXPORTER_OTLP_ENDPOINT",
+        description="OTLP endpoint for exporting OpenTelemetry traces",
+    )
+
+    otel_service_name: str = Field(
+        default="ml-cicd-pipeline",
+        env="OTEL_SERVICE_NAME",
+        description="Service name for OpenTelemetry tracing",
+    )
+
+    otel_resource_attributes: Optional[str] = Field(
+        default=None,
+        env="OTEL_RESOURCE_ATTRIBUTES",
+        description="Resource attributes in 'key1=value1,key2=value2' format",
+    )
+
+    # MLflow configuration
+    mlflow_model_name: Optional[str] = Field(
+        default=None,
+        env="MLFLOW_MODEL_NAME",
+        description="Name of the model in MLflow (required if MODEL_SOURCE=mlflow)",
+    )
+
+    mlflow_model_stage: str = Field(
+        default="Production",
+        env="MLFLOW_MODEL_STAGE",
+        description="Stage of the model in MLflow (e.g., 'Production', 'Staging')",
+    )
+
+    mlflow_model_version: Optional[str] = Field(
+        default=None,
+        env="MLFLOW_MODEL_VERSION",
+        description="Version of the model in MLflow (optional, uses stage if not set)",
+    )
+
+    mlflow_tracking_uri: Optional[str] = Field(
+        default=None,
+        env="MLFLOW_TRACKING_URI",
+        description="URI of the MLflow tracking server (required if MODEL_SOURCE=mlflow)",
+    )
+
+    mlflow_tracking_username: Optional[str] = Field(
+        default=None,
+        env="MLFLOW_TRACKING_USERNAME",
+        description="Username for authenticated MLflow tracking",
+    )
+
+    mlflow_tracking_password: Optional[str] = Field(
+        default=None,
+        env="MLFLOW_TRACKING_PASSWORD",
+        description="Password for authenticated MLflow tracking",
+    )
+
+    # MLflow retry configuration
+    mlflow_retry_max_attempts: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        env="MLFLOW_RETRY_MAX_ATTEMPTS",
+        description="Maximum retry attempts for MLflow operations (1-20)",
+    )
+
+    mlflow_retry_backoff_factor: float = Field(
+        default=2.0,
+        ge=1.0,
+        le=10.0,
+        env="MLFLOW_RETRY_BACKOFF_FACTOR",
+        description="Backoff multiplier for retries (1.0-10.0)",
+    )
+
+    # MLflow circuit breaker configuration
+    mlflow_circuit_breaker_threshold: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        env="MLFLOW_CIRCUIT_BREAKER_THRESHOLD",
+        description="Failure threshold for circuit breaker (1-100)",
+    )
+
+    mlflow_circuit_breaker_timeout: int = Field(
+        default=60,
+        ge=1,
+        le=3600,
+        env="MLFLOW_CIRCUIT_BREAKER_TIMEOUT",
+        description="Circuit breaker timeout in seconds (1-3600)",
+    )
+
+    # Admin API configuration
+    admin_api_token: Optional[str] = Field(
+        default=None,
+        env="ADMIN_API_TOKEN",
+        description="Admin token for accessing administrative endpoints (required for admin endpoints)",
+    )
+
+    admin_token_header: str = Field(
+        default="X-Admin-Token",
+        env="ADMIN_TOKEN_HEADER",
+        description="HTTP header for admin token",
+    )
+
+    @field_validator("model_path", mode="before")
+    @classmethod
+    def resolve_model_path(cls, v: Optional[str | Path], info) -> Optional[Path]:
+        """Resolve model path relative to MODEL_BASE_DIR if not absolute."""
+        if v is None:
+            # If not set, use default path relative to base dir
+            # Note: In Pydantic v2, we can't access other fields in field_validator
+            # So we'll handle this in model_validator instead
+            return None
+        path = Path(v)
+        if path.is_absolute():
+            return path
+        # For relative paths, we'll resolve in model_validator
+        return path
+
+    @field_validator("log_format")
+    @classmethod
+    def validate_log_format(cls, v: str) -> str:
+        """Validate log format is either 'json' or 'text'."""
+        if v not in ("json", "text"):
+            raise ValueError("LOG_FORMAT must be 'json' or 'text'")
+        return v
+
+    @field_validator("model_source", mode="before")
+    @classmethod
+    def normalize_model_source(cls, v: str) -> str:
+        """Normalize model source to lowercase."""
+        if isinstance(v, str):
+            return v.lower()
+        return v
+
+    @model_validator(mode="after")
+    def resolve_relative_model_path(self) -> "AppConfig":
+        """Resolve relative model paths after all fields are set."""
+        if self.model_path is None:
+            # Use default path relative to base dir
+            self.model_path = self.model_base_dir / "model" / "model" / "model.pkl"
+        elif not self.model_path.is_absolute():
+            # Resolve relative path against base dir
+            self.model_path = self.model_base_dir / self.model_path
+        return self
+
+    def validate_model_source_requirements(self) -> None:
+        """Validate MODEL_SOURCE-specific requirements.
+
+        Raises:
+            ValueError: If required configuration is missing for the chosen MODEL_SOURCE.
+        """
+        if self.model_source == ModelSource.MLFLOW:
+            if not self.mlflow_model_name:
+                raise ValueError(
+                    "MLFLOW_MODEL_NAME is required when MODEL_SOURCE=mlflow. "
+                    "Please set the MLFLOW_MODEL_NAME environment variable."
+                )
+            if not self.mlflow_tracking_uri:
+                raise ValueError(
+                    "MLFLOW_TRACKING_URI is required when MODEL_SOURCE=mlflow. "
+                    "Please set the MLFLOW_TRACKING_URI environment variable."
+                )
+        elif self.model_source == ModelSource.LOCAL:
+            if not self.model_path:
+                raise ValueError(
+                    "MODEL_PATH is required when MODEL_SOURCE=local. "
+                    "Please set the MODEL_PATH environment variable."
+                )
+            if not self.model_path.exists():
+                raise ValueError(
+                    f"MODEL_PATH '{self.model_path}' does not exist. "
+                    "Please ensure the model file exists at the specified path."
+                )
+
+    def validate_config(self) -> None:
+        """Validate configuration and fail fast with clear error messages.
+
+        This method should be called at application startup to ensure
+        all required configuration is present and valid.
+
+        Raises:
+            ValueError: If configuration validation fails.
+        """
+        try:
+            self.validate_model_source_requirements()
+        except ValueError as e:
+            logger.error("Configuration validation failed: %s", str(e))
+            raise
+
+    class Config:
+        """Pydantic configuration."""
+
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        case_sensitive = False
+        use_enum_values = True
+
+
+# Create global config instance
+_config: Optional[AppConfig] = None
+
+
+def get_config() -> AppConfig:
+    """Get the global configuration instance.
 
     Returns:
-        The value of the environment variable as an integer.
-
-    Raises:
-        ValueError: If the value exceeds max_value.
+        The global AppConfig instance.
     """
-    raw = get_env(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-        if max_value is not None and value > max_value:
-            raise ValueError(
-                f"Security: {name}={value} exceeds maximum allowed value of {max_value}. "
-                f"This could lead to resource exhaustion."
-            )
-        return value
-    except ValueError:
-        return default
+    global _config
+    if _config is None:
+        _config = AppConfig()
+    return _config
 
-def get_env(name: str, default: str | None = None) -> str | None:
-    """Reads an environment variable with a fallback to a default value.
 
-    Args:
-        name: The name of the environment variable.
-        default: The default value to use if the environment variable is not set.
+# Backward compatibility: expose individual config values as module-level variables
+# These will be populated after config is initialized
+def _init_module_vars() -> None:
+    """Initialize module-level variables from config for backward compatibility."""
+    config = get_config()
+    globals().update(
+        {
+            "MODEL_SOURCE": config.model_source.value,
+            "MODEL_PATH": config.model_path,
+            "MODEL_CACHE_DIR": config.model_cache_dir,
+            "MODEL_AUTO_REFRESH_SECONDS": config.model_auto_refresh_seconds,
+            "MAX_BATCH_SIZE": config.max_batch_size,
+            "EXPECTED_FEATURE_DIMENSION": config.expected_feature_dimension,
+            "LOG_LEVEL": config.log_level,
+            "LOG_FORMAT": config.log_format,
+            "CORRELATION_ID_HEADER": config.correlation_id_header,
+            "OTEL_EXPORTER_OTLP_ENDPOINT": config.otel_exporter_otlp_endpoint,
+            "OTEL_SERVICE_NAME": config.otel_service_name,
+            "OTEL_RESOURCE_ATTRIBUTES": config.otel_resource_attributes,
+            "MLFLOW_MODEL_NAME": config.mlflow_model_name,
+            "MLFLOW_MODEL_STAGE": config.mlflow_model_stage,
+            "MLFLOW_MODEL_VERSION": config.mlflow_model_version,
+            "MLFLOW_TRACKING_URI": config.mlflow_tracking_uri,
+            "MLFLOW_TRACKING_USERNAME": config.mlflow_tracking_username,
+            "MLFLOW_TRACKING_PASSWORD": config.mlflow_tracking_password,
+            "MLFLOW_RETRY_MAX_ATTEMPTS": config.mlflow_retry_max_attempts,
+            "MLFLOW_RETRY_BACKOFF_FACTOR": config.mlflow_retry_backoff_factor,
+            "MLFLOW_CIRCUIT_BREAKER_THRESHOLD": config.mlflow_circuit_breaker_threshold,
+            "MLFLOW_CIRCUIT_BREAKER_TIMEOUT": config.mlflow_circuit_breaker_timeout,
+            "ADMIN_API_TOKEN": config.admin_api_token,
+            "ADMIN_TOKEN_HEADER": config.admin_token_header,
+        }
+    )
 
-    Returns:
-        The value of the environment variable, or the default value.
-    """
-    val = os.getenv(name, default)
-    return val
 
-# Default path to the machine learning model file.
-DEFAULT_MODEL_PATH = "/app/model/model/model.pkl"
-
-# Path to the machine learning model file. Can be overridden via the MODEL_PATH environment variable.
-MODEL_PATH = Path(get_env("MODEL_PATH", DEFAULT_MODEL_PATH))
-# Source of the model, e.g., "mlflow" or "local".
-MODEL_SOURCE = get_env("MODEL_SOURCE", "mlflow")
-
-# Directory to cache downloaded models.
-MODEL_CACHE_DIR = Path(get_env("MODEL_CACHE_DIR", "/var/cache/ml-model"))
-
-# Interval in seconds for auto-refreshing the model. 0 disables it.
-# Maximum value: 3600 seconds (1 hour) to prevent resource exhaustion
-MODEL_AUTO_REFRESH_SECONDS = _get_int("MODEL_AUTO_REFRESH_SECONDS", 0, max_value=3600)
-
-# Maximum batch size for inference requests to prevent DoS attacks
-# Maximum value: 10000 to prevent resource exhaustion
-MAX_BATCH_SIZE = _get_int("MAX_BATCH_SIZE", 1000, max_value=10000)
-
-# Logging level for the application (e.g., "INFO", "DEBUG").
-LOG_LEVEL = get_env("LOG_LEVEL", "INFO")
-
-# Log format to use ("json" or "text").
-LOG_FORMAT = get_env("LOG_FORMAT", "json")
-
-# HTTP header used to track correlation IDs for requests.
-CORRELATION_ID_HEADER = get_env("CORRELATION_ID_HEADER", "X-Correlation-ID")
-
-# OTLP endpoint for exporting OpenTelemetry traces.
-OTEL_EXPORTER_OTLP_ENDPOINT = get_env("OTEL_EXPORTER_OTLP_ENDPOINT")
-
-# Service name for OpenTelemetry tracing.
-OTEL_SERVICE_NAME = get_env("OTEL_SERVICE_NAME", "ml-cicd-pipeline")
-
-# Resource attributes for OpenTelemetry tracing, in "key1=value1,key2=value2" format.
-OTEL_RESOURCE_ATTRIBUTES = get_env("OTEL_RESOURCE_ATTRIBUTES")
-
-# Name of the model in MLflow.
-MLFLOW_MODEL_NAME = get_env("MLFLOW_MODEL_NAME")
-
-# Stage of the model in MLflow (e.g., "Production", "Staging").
-MLFLOW_MODEL_STAGE = get_env("MLFLOW_MODEL_STAGE", "Production")
-
-# Version of the model in MLflow.
-MLFLOW_MODEL_VERSION = get_env("MLFLOW_MODEL_VERSION")
-
-# URI of the MLflow tracking server.
-MLFLOW_TRACKING_URI = get_env("MLFLOW_TRACKING_URI")
-
-# Admin token for accessing administrative endpoints.
-ADMIN_API_TOKEN = get_env("ADMIN_API_TOKEN")
-
-# HTTP header for the admin token.
-ADMIN_TOKEN_HEADER = get_env("ADMIN_TOKEN_HEADER", "X-Admin-Token")
+# Initialize module-level variables
+_init_module_vars()

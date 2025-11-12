@@ -447,30 +447,31 @@ class ResilientMlflowClient:
 # Convenience function to create client from environment variables
 def create_resilient_client_from_env() -> ResilientMlflowClient:
     """
-    Create resilient MLflow client from environment variables.
+    Create resilient MLflow client from configuration.
 
-    Environment variables:
-        MLFLOW_TRACKING_URI: MLflow tracking server URI
-        MLFLOW_RETRY_MAX_ATTEMPTS: Maximum retry attempts (default: 5)
-        MLFLOW_RETRY_BACKOFF_FACTOR: Backoff multiplier (default: 2.0)
-        MLFLOW_CIRCUIT_BREAKER_THRESHOLD: Failure threshold (default: 5)
-        MLFLOW_CIRCUIT_BREAKER_TIMEOUT: Timeout in seconds (default: 60)
+    Uses configuration from src.app.config for all settings.
 
     Returns:
         Configured ResilientMlflowClient
     """
-    import os
+    from src.app.config import (
+        MLFLOW_TRACKING_URI,
+        MLFLOW_RETRY_MAX_ATTEMPTS,
+        MLFLOW_RETRY_BACKOFF_FACTOR,
+        MLFLOW_CIRCUIT_BREAKER_THRESHOLD,
+        MLFLOW_CIRCUIT_BREAKER_TIMEOUT,
+    )
 
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+    tracking_uri = MLFLOW_TRACKING_URI
 
     retry_config = RetryConfig(
-        max_attempts=int(os.getenv("MLFLOW_RETRY_MAX_ATTEMPTS", "5")),
-        backoff_factor=float(os.getenv("MLFLOW_RETRY_BACKOFF_FACTOR", "2.0")),
+        max_attempts=MLFLOW_RETRY_MAX_ATTEMPTS,
+        backoff_factor=MLFLOW_RETRY_BACKOFF_FACTOR,
     )
 
     circuit_breaker_config = CircuitBreakerConfig(
-        failure_threshold=int(os.getenv("MLFLOW_CIRCUIT_BREAKER_THRESHOLD", "5")),
-        timeout=int(os.getenv("MLFLOW_CIRCUIT_BREAKER_TIMEOUT", "60")),
+        failure_threshold=MLFLOW_CIRCUIT_BREAKER_THRESHOLD,
+        timeout=MLFLOW_CIRCUIT_BREAKER_TIMEOUT,
     )
 
     return ResilientMlflowClient(

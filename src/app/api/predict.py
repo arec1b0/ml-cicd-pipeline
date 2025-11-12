@@ -8,14 +8,13 @@ Comments and docstrings are written in English per repo standard.
 from __future__ import annotations
 from typing import List
 import logging
-import os
 import numpy as np
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from src.app.config import MAX_BATCH_SIZE
+from src.app.config import MAX_BATCH_SIZE, EXPECTED_FEATURE_DIMENSION
 from src.utils.drift import emit_prediction_log
 from src.utils.tracing import get_tracer
 from src.data.feature_statistics import get_feature_statistics, validate_feature_range
@@ -26,12 +25,9 @@ tracer = get_tracer(__name__)
 router = APIRouter(prefix="/predict", tags=["predict"])
 limiter = Limiter(key_func=get_remote_address)
 
-# Default feature dimension for Iris dataset
-DEFAULT_FEATURE_DIMENSION = 4
-
-# Feature dimension limit - default to DEFAULT_FEATURE_DIMENSION for Iris dataset
-# This can be overridden by environment variable or dynamically set from model metadata
-EXPECTED_FEATURE_DIMENSION = int(os.getenv("EXPECTED_FEATURE_DIMENSION", str(DEFAULT_FEATURE_DIMENSION)))
+# EXPECTED_FEATURE_DIMENSION is imported from src.app.config
+# It defaults to 4 (Iris dataset) but can be overridden via environment variable
+# The actual value used at runtime may be dynamically set from model metadata at startup
 
 # Input schema: list of numeric feature vectors.
 class PredictRequest(BaseModel):

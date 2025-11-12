@@ -69,14 +69,21 @@ def _configure_mlflow() -> Tuple[str, str, ResilientMlflowClient]:
         tracking_uri = f"file://{(Path.cwd() / 'mlruns').resolve()}"
 
     # Create resilient MLflow client with retry and circuit breaker
+    from src.app.config import (
+        MLFLOW_RETRY_MAX_ATTEMPTS,
+        MLFLOW_RETRY_BACKOFF_FACTOR,
+        MLFLOW_CIRCUIT_BREAKER_THRESHOLD,
+        MLFLOW_CIRCUIT_BREAKER_TIMEOUT,
+    )
+    
     retry_config = RetryConfig(
-        max_attempts=int(os.environ.get("MLFLOW_RETRY_MAX_ATTEMPTS", "5")),
-        backoff_factor=float(os.environ.get("MLFLOW_RETRY_BACKOFF_FACTOR", "2.0")),
+        max_attempts=MLFLOW_RETRY_MAX_ATTEMPTS,
+        backoff_factor=MLFLOW_RETRY_BACKOFF_FACTOR,
     )
 
     circuit_breaker_config = CircuitBreakerConfig(
-        failure_threshold=int(os.environ.get("MLFLOW_CIRCUIT_BREAKER_THRESHOLD", "5")),
-        timeout=int(os.environ.get("MLFLOW_CIRCUIT_BREAKER_TIMEOUT", "60")),
+        failure_threshold=MLFLOW_CIRCUIT_BREAKER_THRESHOLD,
+        timeout=MLFLOW_CIRCUIT_BREAKER_TIMEOUT,
     )
 
     client = ResilientMlflowClient(

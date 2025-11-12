@@ -117,16 +117,29 @@ graph TD
 
 ## Configuration
 
-The service can be configured using environment variables. The most important variables are:
+The service can be configured using environment variables with comprehensive validation and sensible defaults. Configuration is managed using Pydantic BaseSettings, ensuring type safety and fail-fast behavior for misconfigurations.
+
+### Quick Configuration Guide
+
+**Required variables by MODEL_SOURCE:**
+
+- **When `MODEL_SOURCE=mlflow`**: `MLFLOW_MODEL_NAME`, `MLFLOW_TRACKING_URI`
+- **When `MODEL_SOURCE=local`**: `MODEL_PATH` (must exist)
+- **Always required**: `ADMIN_API_TOKEN` (for admin endpoints)
+
+**Key variables:**
 
 *   `MODEL_SOURCE`: The source of the model. Can be `local` or `mlflow`. Defaults to `mlflow`.
-*   `MODEL_PATH`: The local path to the model file. Only used if `MODEL_SOURCE` is `local`.
-*   `MLFLOW_TRACKING_URI`: The URI of the MLflow tracking server.
-*   `MLFLOW_MODEL_NAME`: The name of the model in the MLflow model registry.
+*   `MODEL_PATH`: The local path to the model file. Only used if `MODEL_SOURCE` is `local`. Defaults to `/app/model/model/model.pkl` (configurable via `MODEL_BASE_DIR`).
+*   `MLFLOW_TRACKING_URI`: The URI of the MLflow tracking server (required if `MODEL_SOURCE=mlflow`).
+*   `MLFLOW_MODEL_NAME`: The name of the model in the MLflow model registry (required if `MODEL_SOURCE=mlflow`).
 *   `MLFLOW_MODEL_STAGE`: The stage of the model in the MLflow model registry. Defaults to `Production`.
-*   `EXPECTED_FEATURE_DIMENSION`: The expected number of input features for the model. Defaults to `4` (for Iris dataset). This value is automatically derived from the loaded model metadata at startup. You only need to set this explicitly if you want to override the auto-detected value.
+*   `MODEL_AUTO_REFRESH_SECONDS`: Interval in seconds for auto-refreshing the model. Defaults to `300` (5 minutes). Set to `0` to disable.
+*   `EXPECTED_FEATURE_DIMENSION`: The expected number of input features for the model. Defaults to `4` (for Iris dataset). This value is automatically derived from the loaded model metadata at startup.
 *   `LOG_LEVEL`: The logging level. Defaults to `INFO`.
 *   `LOG_FORMAT`: The log format. Can be `json` or `text`. Defaults to `json`.
+
+For a complete reference of all configuration variables, validation rules, and examples, see **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
 
 ## Testing
 

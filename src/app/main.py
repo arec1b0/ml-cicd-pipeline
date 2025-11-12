@@ -16,6 +16,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from src.app.config import (
+    get_config,
     MODEL_PATH,
     MODEL_SOURCE,
     MODEL_CACHE_DIR,
@@ -32,6 +33,7 @@ from src.app.config import (
     MLFLOW_TRACKING_URI,
     ADMIN_API_TOKEN,
     ADMIN_TOKEN_HEADER,
+    EXPECTED_FEATURE_DIMENSION,
 )
 from src.app.api.health import router as health_router
 from src.app.api.predict import router as predict_router
@@ -174,7 +176,6 @@ def create_app() -> FastAPI:
             )
         else:
             # Fallback to environment variable or default
-            from src.app.api.predict import EXPECTED_FEATURE_DIMENSION
             app.state.expected_feature_dimension = EXPECTED_FEATURE_DIMENSION
             log.warning(
                 "Could not derive feature dimension from model, using fallback value: %d",
@@ -307,12 +308,22 @@ def create_app() -> FastAPI:
     async def _startup():
         """Handles the application startup event.
 
-        This function is called when the application starts. It clears any
-        existing model state, performs an initial model load, and starts the
-        background model refresh loop if configured.
+        This function is called when the application starts. It validates
+        configuration, clears any existing model state, performs an initial
+        model load, and starts the background model refresh loop if configured.
         """
-        _clear_state()
         log = logging.getLogger(__name__)
+        
+        # Validate configuration at startup - fail fast with clear error messages
+        try:
+            config = get_config()
+            config.validate_config()
+            log.info("Configuration validation passed")
+        except ValueError as e:
+            log.error("Configuration validation failed: %s", str(e))
+            raise
+        
+        _clear_state()
         try:
             await reload_and_apply(force=True)
         except (RuntimeError, FileNotFoundError, MlflowException, ConnectionError, OSError) as exc:
