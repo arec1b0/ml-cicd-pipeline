@@ -434,10 +434,11 @@ class DriftMonitor:
         return query
 
     def _collect_from_loki(self) -> list[dict[str, Any]]:
-        """Collects log events from Loki.
+        """Collects log events from Loki with streaming/pagination support.
 
         This method queries Loki for log events that match the configured
-        query and time range.
+        query and time range, using pagination to handle large result sets
+        efficiently.
 
         Returns:
             A list of dictionaries, where each dictionary represents a log event.
@@ -454,35 +455,109 @@ class DriftMonitor:
 
         end = datetime.now(timezone.utc)
         start = end - timedelta(minutes=self.settings.loki_range_minutes)
-        params = {
-            "query": sanitized_query,
-            "start": int(start.timestamp() * 1e9),
-            "end": int(end.timestamp() * 1e9),
-            "direction": "forward",
-            "limit": 5000,
-        }
         url = self.settings.loki_base_url.rstrip("/") + "/loki/api/v1/query_range"
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        payload = response.json()
+        
         events: list[dict[str, Any]] = []
-        data = payload.get("data", {})
-        for stream in data.get("result", []):
-            for _ts, line in stream.get("values", []):
-                try:
-                    parsed = json.loads(line)
-                except json.JSONDecodeError:
-                    logger.debug("Skipping non-JSON Loki log line", extra={"line": line})
-                    continue
-                # Loki wraps log line as string, but our logger emits JSON string already.
-                if isinstance(parsed, str):
+        batch_size = self.settings.loki_batch_size
+        max_entries = self.settings.loki_max_entries
+        
+        # Use pagination with start/end timestamps
+        current_start = start
+        last_timestamp = None
+        
+        while True:
+            # Check if we've reached the maximum entries limit
+            if max_entries and len(events) >= max_entries:
+                logger.info(
+                    f"Reached maximum entries limit ({max_entries}), stopping collection",
+                    extra={"collected": len(events)}
+                )
+                break
+            
+            params = {
+                "query": sanitized_query,
+                "start": int(current_start.timestamp() * 1e9),
+                "end": int(end.timestamp() * 1e9),
+                "direction": "forward",
+                "limit": batch_size,
+            }
+            
+            # If we have a last timestamp from previous batch, use it as start
+            if last_timestamp:
+                params["start"] = int(last_timestamp.timestamp() * 1e9)
+            
+            try:
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                payload = response.json()
+            except requests.RequestException as exc:
+                logger.error(
+                    "Failed to query Loki",
+                    extra={"error": str(exc), "error_type": type(exc).__name__}
+                )
+                break
+            
+            data = payload.get("data", {})
+            result_streams = data.get("result", [])
+            
+            # If no results, we're done
+            if not result_streams:
+                break
+            
+            batch_events = []
+            batch_last_timestamp = None
+            
+            for stream in result_streams:
+                for ts_str, line in stream.get("values", []):
                     try:
-                        parsed = json.loads(parsed)
+                        parsed = json.loads(line)
                     except json.JSONDecodeError:
+                        logger.debug("Skipping non-JSON Loki log line", extra={"line": line})
                         continue
-                if isinstance(parsed, dict):
-                    events.append(parsed)
-        return events
+                    
+                    # Loki wraps log line as string, but our logger emits JSON string already.
+                    if isinstance(parsed, str):
+                        try:
+                            parsed = json.loads(parsed)
+                        except json.JSONDecodeError:
+                            continue
+                    
+                    if isinstance(parsed, dict):
+                        batch_events.append(parsed)
+                        # Track the latest timestamp in this batch
+                        try:
+                            ts_ns = int(ts_str)
+                            ts_dt = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc)
+                            if batch_last_timestamp is None or ts_dt > batch_last_timestamp:
+                                batch_last_timestamp = ts_dt
+                        except (ValueError, TypeError):
+                            pass
+            
+            # Add batch to results
+            events.extend(batch_events)
+            
+            # If we got fewer results than batch size, we've reached the end
+            if len(batch_events) < batch_size:
+                break
+            
+            # If no timestamp progress, break to avoid infinite loop
+            if batch_last_timestamp is None or (
+                last_timestamp is not None and batch_last_timestamp <= last_timestamp
+            ):
+                break
+            
+            last_timestamp = batch_last_timestamp
+            
+            logger.debug(
+                f"Collected batch of {len(batch_events)} events",
+                extra={"total_collected": len(events), "batch_size": len(batch_events)}
+            )
+        
+        logger.info(
+            f"Collected {len(events)} total events from Loki",
+            extra={"total_events": len(events)}
+        )
+        return events[:max_entries] if max_entries else events
 
     def _events_to_dataframe(self, events: Iterable[dict[str, Any]]) -> pd.DataFrame:
         """Converts a list of log events to a pandas DataFrame.

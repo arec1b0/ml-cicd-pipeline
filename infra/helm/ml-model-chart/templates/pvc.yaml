@@ -1,0 +1,18 @@
+{{- if .Values.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ml-model-chart.fullname" . }}-model-cache
+  labels:
+    app: {{ include "ml-model-chart.name" . }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.accessMode | default "ReadWriteMany" }}
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | default "10Gi" }}
+{{- end }}
+

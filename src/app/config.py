@@ -207,6 +207,48 @@ class AppConfig(BaseSettings):
         description="HTTP header for admin token",
     )
 
+    # Prediction cache configuration
+    prediction_cache_enabled: bool = Field(
+        default=True,
+        env="PREDICTION_CACHE_ENABLED",
+        description="Enable LRU cache for predictions",
+    )
+
+    prediction_cache_max_size: int = Field(
+        default=1000,
+        ge=1,
+        le=100000,
+        env="PREDICTION_CACHE_MAX_SIZE",
+        description="Maximum number of entries in prediction cache (1-100000)",
+    )
+
+    prediction_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=1,
+        le=3600,
+        env="PREDICTION_CACHE_TTL_SECONDS",
+        description="Time-to-live for cache entries in seconds (1-3600)",
+    )
+
+    # Prediction history configuration
+    prediction_history_enabled: bool = Field(
+        default=False,
+        env="PREDICTION_HISTORY_ENABLED",
+        description="Enable prediction history persistence to TimescaleDB",
+    )
+
+    prediction_history_database_url: Optional[str] = Field(
+        default=None,
+        env="PREDICTION_HISTORY_DATABASE_URL",
+        description="TimescaleDB connection string (postgresql://user:pass@host/db)",
+    )
+
+    prediction_history_table_name: str = Field(
+        default="prediction_history",
+        env="PREDICTION_HISTORY_TABLE_NAME",
+        description="Table name for prediction history",
+    )
+
     @field_validator("model_path", mode="before")
     @classmethod
     def resolve_model_path(cls, v: Optional[str | Path], info) -> Optional[Path]:
@@ -349,6 +391,12 @@ def _init_module_vars() -> None:
             "MLFLOW_CIRCUIT_BREAKER_TIMEOUT": config.mlflow_circuit_breaker_timeout,
             "ADMIN_API_TOKEN": config.admin_api_token,
             "ADMIN_TOKEN_HEADER": config.admin_token_header,
+            "PREDICTION_CACHE_ENABLED": config.prediction_cache_enabled,
+            "PREDICTION_CACHE_MAX_SIZE": config.prediction_cache_max_size,
+            "PREDICTION_CACHE_TTL_SECONDS": config.prediction_cache_ttl_seconds,
+            "PREDICTION_HISTORY_ENABLED": config.prediction_history_enabled,
+            "PREDICTION_HISTORY_DATABASE_URL": config.prediction_history_database_url,
+            "PREDICTION_HISTORY_TABLE_NAME": config.prediction_history_table_name,
         }
     )
 

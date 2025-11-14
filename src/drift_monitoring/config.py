@@ -43,6 +43,8 @@ class DriftSettings:
     loki_base_url: Optional[str]
     loki_query: Optional[str]
     loki_range_minutes: int
+    loki_batch_size: int  # Number of log entries per batch
+    loki_max_entries: Optional[int]  # Maximum total entries to fetch
     evaluation_interval_seconds: int
     min_rows: int
     max_rows: Optional[int]
@@ -71,6 +73,8 @@ class DriftSettings:
             loki_base_url=os.getenv("LOKI_BASE_URL"),
             loki_query=os.getenv("LOKI_QUERY"),
             loki_range_minutes=_get_env_int("LOKI_RANGE_MINUTES", 60),
+            loki_batch_size=_get_env_int("LOKI_BATCH_SIZE", 1000),
+            loki_max_entries=_get_env_int("LOKI_MAX_ENTRIES"),
             evaluation_interval_seconds=_get_env_int("DRIFT_EVALUATION_INTERVAL_SECONDS", 300),
             min_rows=_get_env_int("DRIFT_MIN_ROWS", 50),
             max_rows=_get_env_int("DRIFT_MAX_ROWS"),

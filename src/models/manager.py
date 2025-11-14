@@ -22,6 +22,7 @@ from mlflow.exceptions import MlflowException
 
 from src.models.infer import load_model, ModelWrapper
 from src.resilient_mlflow import ResilientMlflowClient, RetryConfig, CircuitBreakerConfig
+from src.utils.rwlock import AsyncRWLock
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,7 @@ class ModelManager:
         self._mlflow_model_version = mlflow_model_version
         self._mlflow_tracking_uri = mlflow_tracking_uri
         self._client: Optional[ResilientMlflowClient] = None
-        self._lock = asyncio.Lock()
+        self._lock = AsyncRWLock()  # Read-write lock for concurrent reads
         self._current: Optional[LoadedModel] = None
         self._last_server_version: Optional[str] = None
 
@@ -148,6 +149,9 @@ class ModelManager:
     def current(self) -> Optional[LoadedModel]:
         """
         Return the current loaded model state (if any).
+        
+        Note: This property does not use locking. For thread-safe access,
+        use get_current_model() instead.
         """
         return self._current
 
@@ -189,7 +193,7 @@ class ModelManager:
         Returns:
             The newly loaded model, or None if the model was not reloaded.
         """
-        async with self._lock:
+        async with self._lock.write():
             descriptor = await self._resolve_descriptor()
             if descriptor is None:
                 logger.warning("No model descriptor resolved for source", extra={"source": self._source})
@@ -216,7 +220,7 @@ class ModelManager:
         if self._source != "mlflow":
             return None
 
-        async with self._lock:
+        async with self._lock.write():
             descriptor = await self._resolve_descriptor()
             if descriptor is None:
                 return None
@@ -225,6 +229,18 @@ class ModelManager:
             state = await self._load_descriptor(descriptor, force=False)
             self._current = state
             return state
+    
+    async def get_current_model(self) -> Optional[LoadedModel]:
+        """Get the current model with read lock for concurrent access.
+        
+        This method should be used when you need to access the model for
+        prediction operations, allowing multiple concurrent reads.
+        
+        Returns:
+            The currently loaded model, or None if no model is loaded.
+        """
+        async with self._lock.read():
+            return self._current
 
     async def _resolve_descriptor(self) -> Optional[ModelDescriptor]:
         """Resolves the current model descriptor.

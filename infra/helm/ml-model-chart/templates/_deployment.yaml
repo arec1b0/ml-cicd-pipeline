@@ -89,12 +89,24 @@ Parameters:
             - python
             - -c
             - |
-              from src.model.manager import ModelManager
+              from src.models.manager import ModelManager
+              from pathlib import Path
               import os
+              import asyncio
               print("Pre-fetching model to cache...")
-              manager = ModelManager()
-              model = manager.load_model()
-              print(f"Model pre-fetched successfully: {type(model)}")
+              async def prefetch():
+                manager = ModelManager(
+                  source=os.getenv("MODEL_SOURCE", "mlflow"),
+                  model_path=None,
+                  cache_dir=Path({{ $root.Values.env.modelCacheDir | default "/var/cache/ml-model" | quote }}),
+                  mlflow_model_name=os.getenv("MLFLOW_MODEL_NAME"),
+                  mlflow_model_stage=os.getenv("MLFLOW_MODEL_STAGE", "Production"),
+                  mlflow_model_version=os.getenv("MLFLOW_MODEL_VERSION"),
+                  mlflow_tracking_uri=os.getenv("MLFLOW_TRACKING_URI"),
+                )
+                model = await manager.initialize()
+                print(f"Model pre-fetched successfully: {type(model)}")
+              asyncio.run(prefetch())
       containers:
         - name: api
           image: "{{ $root.Values.image.repository }}:{{ $imageTag }}"
@@ -206,7 +218,13 @@ Parameters:
             {{- toYaml $root.Values.resources | nindent 12 }}
           {{- end }}
       volumes:
+        {{- if $root.Values.persistence.enabled }}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: {{ include "ml-model-chart.fullname" $root }}-model-cache
+        {{- else }}
         - name: model-cache
           emptyDir: {}
+        {{- end }}
 {{- end }}
 

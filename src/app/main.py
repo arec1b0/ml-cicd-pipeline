@@ -45,6 +45,7 @@ from src.utils.telemetry import PrometheusMiddleware, MODEL_ACCURACY
 from src.utils.logging import setup_logging
 from src.app.api.middleware.correlation import CorrelationIDMiddleware
 from src.utils.tracing import initialize_tracing, instrument_fastapi
+from src.app.api.predict import get_prediction_history
 from mlflow.exceptions import MlflowException
 
 def create_app() -> FastAPI:
@@ -343,6 +344,18 @@ def create_app() -> FastAPI:
                 app.state.model_refresh_task = asyncio.create_task(
                     _auto_refresh_loop(MODEL_AUTO_REFRESH_SECONDS)
                 )
+        
+        # Initialize prediction history store if enabled
+        history_store = get_prediction_history()
+        if history_store:
+            try:
+                await history_store.initialize()
+                log.info("Prediction history store initialized")
+            except Exception as exc:
+                log.warning(
+                    "Failed to initialize prediction history store",
+                    extra={"error": str(exc), "error_type": type(exc).__name__}
+                )
 
     @app.on_event("shutdown")
     async def _shutdown():
@@ -356,6 +369,12 @@ def create_app() -> FastAPI:
             refresh_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await refresh_task
+        
+        # Close prediction history store
+        history_store = get_prediction_history()
+        if history_store:
+            await history_store.close()
+        
         _clear_state()
 
     return app

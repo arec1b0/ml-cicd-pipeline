@@ -14,13 +14,53 @@ from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from src.app.config import MAX_BATCH_SIZE, EXPECTED_FEATURE_DIMENSION
+from src.app.config import (
+    MAX_BATCH_SIZE,
+    EXPECTED_FEATURE_DIMENSION,
+    PREDICTION_CACHE_ENABLED,
+    PREDICTION_CACHE_MAX_SIZE,
+    PREDICTION_CACHE_TTL_SECONDS,
+    PREDICTION_HISTORY_ENABLED,
+    PREDICTION_HISTORY_DATABASE_URL,
+    PREDICTION_HISTORY_TABLE_NAME,
+)
 from src.utils.drift import emit_prediction_log
 from src.utils.tracing import get_tracer
 from src.data.feature_statistics import get_feature_statistics, validate_feature_range
+from src.utils.prediction_cache import PredictionCache
+from src.utils.prediction_history import PredictionHistoryStore
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
+
+# Initialize prediction cache
+_prediction_cache: PredictionCache | None = None
+_prediction_history: PredictionHistoryStore | None = None
+
+def get_prediction_cache() -> PredictionCache | None:
+    """Get or create the prediction cache instance."""
+    global _prediction_cache
+    if PREDICTION_CACHE_ENABLED:
+        if _prediction_cache is None:
+            _prediction_cache = PredictionCache(
+                max_size=PREDICTION_CACHE_MAX_SIZE,
+                ttl_seconds=PREDICTION_CACHE_TTL_SECONDS,
+            )
+        return _prediction_cache
+    return None
+
+def get_prediction_history() -> PredictionHistoryStore | None:
+    """Get or create the prediction history store instance."""
+    global _prediction_history
+    if PREDICTION_HISTORY_ENABLED and PREDICTION_HISTORY_DATABASE_URL:
+        if _prediction_history is None:
+            _prediction_history = PredictionHistoryStore(
+                database_url=PREDICTION_HISTORY_DATABASE_URL,
+                table_name=PREDICTION_HISTORY_TABLE_NAME,
+                enabled=True,
+            )
+        return _prediction_history
+    return None
 
 router = APIRouter(prefix="/predict", tags=["predict"])
 limiter = Limiter(key_func=get_remote_address)
@@ -175,6 +215,59 @@ async def predict(request: Request, payload: PredictRequest, background_tasks: B
     model_metadata = getattr(app.state, "model_metadata", None)
     model_path = model_metadata.get("model_path") if model_metadata else None
 
+    # Check cache first
+    cache = get_prediction_cache()
+    cached_predictions = None
+    if cache:
+        cached_predictions = cache.get(payload.features)
+        if cached_predictions is not None:
+            logger.info(
+                "Prediction served from cache",
+                extra={
+                    "correlation_id": correlation_id,
+                    "prediction_count": len(cached_predictions)
+                }
+            )
+            # Normalize integer-like floats to ints
+            normalized_cached: list[int] = []
+            for p in cached_predictions:
+                if isinstance(p, float) and p.is_integer():
+                    normalized_cached.append(int(p))
+                else:
+                    normalized_cached.append(int(p) if isinstance(p, (int, float)) else p)
+            
+            metadata = {
+                "path": str(request.url.path),
+                "client_host": getattr(request.client, "host", None),
+                "model": getattr(app.state, "model_metadata", None),
+                "headers": {
+                    "user_agent": request.headers.get("user-agent"),
+                    "x_request_id": request.headers.get("x-request-id"),
+                },
+            }
+            background_tasks.add_task(
+                emit_prediction_log,
+                features=payload.features,
+                predictions=normalized_cached,
+                metadata=metadata,
+            )
+            
+            # Store in prediction history
+            history_store = get_prediction_history()
+            if history_store:
+                model_metadata = getattr(app.state, "model_metadata", None)
+                background_tasks.add_task(
+                    history_store.store,
+                    features=payload.features,
+                    predictions=normalized_cached,
+                    model_version=model_metadata.get("version") if model_metadata else None,
+                    model_stage=model_metadata.get("stage") if model_metadata else None,
+                    correlation_id=correlation_id,
+                    metadata=metadata,
+                )
+            
+            return PredictResponse(predictions=normalized_cached)
+
     try:
         # Create custom span for model inference
         with tracer.start_as_current_span("model_inference") as span:
@@ -188,6 +281,10 @@ async def predict(request: Request, payload: PredictRequest, background_tasks: B
             # Execute model prediction within span
             preds = model_wrapper.predict(payload.features)
             
+            # Cache the predictions
+            if cache:
+                cache.set(payload.features, preds)
+            
             # Add output attributes
             span.set_attribute("ml.output.prediction_count", len(preds))
             
@@ -195,7 +292,8 @@ async def predict(request: Request, payload: PredictRequest, background_tasks: B
                 "Prediction completed successfully",
                 extra={
                     "correlation_id": correlation_id,
-                    "prediction_count": len(preds)
+                    "prediction_count": len(preds),
+                    "cached": False
                 }
             )
     except Exception as exc:
@@ -206,12 +304,14 @@ async def predict(request: Request, payload: PredictRequest, background_tasks: B
         raise HTTPException(status_code=500, detail=f"Prediction failed: {exc}")
 
     # Normalize integer-like floats to ints
-    normalized: list = []
+    normalized: list[int] = []
     for p in preds:
         if isinstance(p, float) and p.is_integer():
             normalized.append(int(p))
+        elif isinstance(p, (int, float)):
+            normalized.append(int(p))
         else:
-            normalized.append(p)
+            normalized.append(int(p) if isinstance(p, (int, float)) else p)
 
     metadata = {
         "path": str(request.url.path),
@@ -228,4 +328,19 @@ async def predict(request: Request, payload: PredictRequest, background_tasks: B
         predictions=normalized,
         metadata=metadata,
     )
+    
+    # Store in prediction history
+    history_store = get_prediction_history()
+    if history_store:
+        model_metadata = getattr(app.state, "model_metadata", None)
+        background_tasks.add_task(
+            history_store.store,
+            features=payload.features,
+            predictions=normalized,
+            model_version=model_metadata.get("version") if model_metadata else None,
+            model_stage=model_metadata.get("stage") if model_metadata else None,
+            correlation_id=correlation_id,
+            metadata=metadata,
+        )
+    
     return PredictResponse(predictions=normalized)

@@ -27,6 +27,13 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
+# Persistence configuration for shared model cache
+persistence:
+  enabled: false  # Set to true to use shared PVC instead of emptyDir
+  accessMode: ReadWriteMany  # Required for multi-pod access
+  size: 10Gi
+  storageClass: ""  # Leave empty to use default storage class
+
 # HorizontalPodAutoscaler configuration
 hpa:
   enabled: true
