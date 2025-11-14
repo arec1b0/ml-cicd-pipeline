@@ -64,7 +64,7 @@ graph TD
 ### Prerequisites
 
 - Python 3.11
-- Poetry 1.5+ (or `pip` with `requirements.txt`)
+- Poetry 1.5+ (or `pip` with `pyproject.toml`)
 - Docker, `kubectl`, and `helm` for containerized and Kubernetes workflows.
 
 ### Installation

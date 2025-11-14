@@ -63,8 +63,8 @@ if ($poetry) {
     exit 0
 }
 
-# Fallback: create .venv and pip install
-Write-Host "Poetry unavailable. Creating .venv and installing requirements.txt as fallback."
+# Fallback: create .venv and pip install from pyproject.toml
+Write-Host "Poetry unavailable. Creating .venv and installing from pyproject.toml as fallback."
 
 python -m venv .venv
 if (-not (Test-Path ".venv\Scripts\Activate.ps1")) {
@@ -76,9 +76,9 @@ Write-Host "Activating virtual environment."
 # Note: user must run the activation command in their interactive shell:
 Write-Host "Run in your interactive PowerShell: `& .\.venv\Scripts\Activate.ps1`"
 
-# Install packages using pip
+# Install packages using pip (pip can install from pyproject.toml)
 & .\.venv\Scripts\python -m pip install --upgrade pip setuptools wheel
-& .\.venv\Scripts\python -m pip install -r requirements.txt
+& .\.venv\Scripts\python -m pip install -e .
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "pip install failed. Inspect output."

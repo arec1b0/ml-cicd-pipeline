@@ -21,7 +21,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 The script:
 - Verifies Python 3.11.
 - Installs Poetry if missing, then runs `poetry install`.
-- Falls back to creating `.venv` and `pip install -r requirements.txt` if Poetry is unavailable.
+- Falls back to creating `.venv` and `pip install -e .` from pyproject.toml if Poetry is unavailable.
 
 ### macOS / Linux
 
@@ -38,7 +38,7 @@ If you prefer virtual environments instead of a global site-packages install:
 python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ## 3. Environment Variables

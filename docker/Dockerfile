@@ -1,5 +1,5 @@
 # Production-ready minimal image for the inference service.
-# Uses Python 3.11 slim image and installs pip requirements.
+# Uses Python 3.11 slim image and installs dependencies via Poetry.
 # Models are pulled at runtime via the ModelManager, so the image contains only application code.
 # Pinned to specific digest for security and reproducibility
 FROM python:3.11-slim@sha256:a3c4bc9fe3a7cb781fac7f3c00000553802d405bb878c1c41ae2ccccdecdd59a
@@ -10,11 +10,17 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Copy requirements and install. Keep image small using --no-cache-dir.
-COPY requirements.txt /app/requirements.txt
+# Install Poetry
 RUN python -m pip install --upgrade pip \
- && pip install --no-cache-dir -r /app/requirements.txt \
- && pip install --no-cache-dir mlflow click
+ && pip install --no-cache-dir poetry==1.8.4
+
+# Copy dependency files
+COPY pyproject.toml poetry.lock /app/
+
+# Install dependencies (production only, no dev dependencies)
+# Using --no-root to avoid installing the project itself (we'll copy src later)
+RUN poetry config virtualenvs.create false \
+ && poetry install --only main --no-interaction --no-ansi --no-root
 
 # Copy application code
 COPY src /app/src
