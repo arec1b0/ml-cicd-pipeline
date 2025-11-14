@@ -11,11 +11,7 @@ import sys
 from contextvars import ContextVar
 from typing import Any
 
-try:
-    from pythonjsonlogger import jsonlogger
-except ImportError:
-    # Fallback if python-json-logger is not installed
-    jsonlogger = None
+from pythonjsonlogger import jsonlogger
 
 # Context variable for correlation ID
 correlation_id_ctx: ContextVar[str | None] = ContextVar("correlation_id", default=None)
@@ -85,31 +81,31 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
     """
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-    
+
     # Remove existing handlers to avoid duplicates
     root_logger.handlers.clear()
-    
+
     # Create console handler
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-    
-    if log_format.lower() == "json" and jsonlogger:
+
+    if log_format.lower() == "json":
         # Use JSON formatter
         formatter = CustomJsonFormatter(
             "%(timestamp)s %(level)s %(name)s %(message)s %(correlation_id)s",
             datefmt="%Y-%m-%dT%H:%M:%S"
         )
     else:
-        # Fallback to text format
+        # Text format
         formatter = logging.Formatter(
             "%(asctime)s [%(correlation_id)s] %(levelname)s %(name)s: %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S"
         )
-    
+
     handler.setFormatter(formatter)
-    
+
     # Add correlation ID filter
     handler.addFilter(CorrelationIDFilter())
-    
+
     root_logger.addHandler(handler)
 

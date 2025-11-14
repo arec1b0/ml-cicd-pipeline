@@ -122,3 +122,50 @@ jobs:
             safety-report.json
             pip-audit-report.json
           retention-days: 30
+
+  license-compliance:
+    name: License Compliance Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry pip-licenses
+          poetry config virtualenvs.create false
+          poetry install --no-interaction --no-ansi
+
+      - name: Check dependency licenses
+        run: |
+          echo "=== Dependency License Report ==="
+          pip-licenses --format=markdown --output-file=licenses-report.md
+          pip-licenses --format=json --output-file=licenses-report.json
+          cat licenses-report.md
+          echo ""
+          echo "=== Checking for problematic licenses ==="
+          # Fail if GPL, AGPL, or other copyleft licenses are found
+          if pip-licenses | grep -iE "(GPL|AGPL|SSPL|CC-BY-SA)" | grep -v LGPL; then
+            echo "ERROR: Found copyleft licenses that may require code disclosure"
+            echo "Please review licenses-report.md for details"
+            exit 1
+          else
+            echo "✓ No problematic licenses found"
+          fi
+
+      - name: Upload license reports
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: license-reports
+          path: |
+            licenses-report.md
+            licenses-report.json
+          retention-days: 90
